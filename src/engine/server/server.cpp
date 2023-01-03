@@ -2512,6 +2512,27 @@ int CServer::LoadMap(const char *pMapName)
 	return 1;
 }
 
+bool CServer::AddBot()
+{
+	for(int ClientID = 1; ClientID < MAX_CLIENTS; ClientID++)
+	{
+		if (m_aClients[ClientID].m_State == CClient::STATE_EMPTY)
+		{
+			//m_aClients[ClientID].m_aName = "Bot";
+			memcpy(m_aClients[ClientID].m_aName, "Bot", 4);
+			m_aClients[ClientID].m_State = CClient::STATE_INGAME;
+			m_aClients[ClientID].m_SnapRate == CClient::SNAPRATE_FULL;
+			m_aClients[ClientID].m_DDNetVersion = VERSION_DDRACE;
+			m_aClients[ClientID].m_pRconCmdToSend = 0;
+			GameServer()->OnClientConnected(ClientID, nullptr);
+			GameServer()->OnClientEnter(ClientID);
+			break;
+		}
+	}
+
+	return true;
+}
+
 int CServer::Run()
 {
 	if(m_RunServer == UNINITIALIZED)
@@ -2620,6 +2641,8 @@ int CServer::Run()
 		dbg_msg("server", "| rcon password: '%s' |", Config()->m_SvRconPassword);
 		dbg_msg("server", "+-------------------------+");
 	}
+
+	AddBot();
 
 	// start game
 	{
@@ -2760,6 +2783,23 @@ int CServer::Run()
 				{
 					if(m_aClients[c].m_State != CClient::STATE_INGAME)
 						continue;
+
+					// Move bot wherever you want
+					if(strcmp(m_aClients[c].m_aName, "Bot") == 0)
+					{
+						// m_Direction:
+						// 1 - Right
+						// 0 - Stay
+						// -1 - Left
+
+						CNetObj_PlayerInput pApplyInput;
+						mem_zero(&pApplyInput, sizeof(pApplyInput));
+						pApplyInput.m_Direction = 1;
+
+						GameServer()->OnClientPredictedInput(c, &pApplyInput);
+						continue;
+					}
+
 					bool ClientHadInput = false;
 					for(auto &Input : m_aClients[c].m_aInputs)
 					{

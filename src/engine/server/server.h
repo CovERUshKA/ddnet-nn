@@ -273,6 +273,8 @@ public:
 	CServer();
 	~CServer();
 
+	bool AddBot();
+
 	bool IsClientNameAvailable(int ClientID, const char *pNameRequest);
 	bool SetClientNameImpl(int ClientID, const char *pNameRequest, bool Set);
 
