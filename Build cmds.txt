@@ -1,0 +1,5 @@
+cmake -B build\x86 -S . -A WIN32
+cmake --build build\x86 --config Release
+
+cmake -B build\x64 -S . -A x64
+cmake --build build\x64 --config Release
