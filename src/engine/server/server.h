@@ -16,6 +16,7 @@
 #include <engine/shared/protocol.h>
 #include <engine/shared/snapshot.h>
 #include <engine/shared/uuid_manager.h>
+#include <game/server/gamecontext.h>
 
 #include <list>
 #include <memory>

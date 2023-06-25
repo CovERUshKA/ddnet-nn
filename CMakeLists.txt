@@ -2507,6 +2507,8 @@ if(SERVER)
     gamemodes/DDRace.h
     gameworld.cpp
     gameworld.h
+    neuralnetwork.cpp
+    neuralnetwork.h
     player.cpp
     player.h
     save.cpp

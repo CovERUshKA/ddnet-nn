@@ -33,6 +33,9 @@
 #include <engine/shared/snapshot.h>
 
 #include <game/version.h>
+#include <game/server/entities/character.h>
+#include <game/server/gamecontext.h>
+#include <game/mapitems.h>
 
 // DDRace
 #include <engine/shared/linereader.h>
@@ -2514,14 +2517,14 @@ int CServer::LoadMap(const char *pMapName)
 
 bool CServer::AddBot()
 {
-	for(int ClientID = 1; ClientID < MAX_CLIENTS; ClientID++)
+	for(int ClientID = MAX_CLIENTS-1; ClientID < MAX_CLIENTS; ClientID--)
 	{
 		if (m_aClients[ClientID].m_State == CClient::STATE_EMPTY)
 		{
 			//m_aClients[ClientID].m_aName = "Bot";
 			memcpy(m_aClients[ClientID].m_aName, "Bot", 4);
 			m_aClients[ClientID].m_State = CClient::STATE_INGAME;
-			m_aClients[ClientID].m_SnapRate == CClient::SNAPRATE_FULL;
+			m_aClients[ClientID].m_SnapRate = CClient::SNAPRATE_FULL;
 			m_aClients[ClientID].m_DDNetVersion = VERSION_DDRACE;
 			m_aClients[ClientID].m_pRconCmdToSend = 0;
 			GameServer()->OnClientConnected(ClientID, nullptr);
@@ -2643,7 +2646,7 @@ int CServer::Run()
 	}
 
 	AddBot();
-
+	
 	// start game
 	{
 		bool NonActive = false;
@@ -2785,19 +2788,81 @@ int CServer::Run()
 						continue;
 
 					// Move bot wherever you want
-					if(strcmp(m_aClients[c].m_aName, "Bot") == 0)
+					//if(strcmp(m_aClients[c].m_aName, "Bot") == 0)
+					//{
+					//	// m_Direction:
+					//	// 1 - Right
+					//	// 0 - Stay
+					//	// -1 - Left
+
+					//	//#include <>
+					//	if(strcmp(m_aClients[0].m_aName, "heartless tee") == 0)
+					//	{
+					//		for(auto &Input : m_aClients[0].m_aInputs)
+					//		{
+					//			if(Input.m_GameTick == Tick())
+					//			{
+					//				CNetObj_PlayerInput pApplyInput;
+					//				mem_zero(&pApplyInput, sizeof(pApplyInput));
+					//				memcpy(&pApplyInput, Input.m_aData, sizeof(pApplyInput));
+					//				GameServer()->OnClientPredictedInput(c, &pApplyInput);
+					//				break;
+					//			}
+					//		}
+					//	}
+					//	else
+					//	{
+					//		CNetObj_PlayerInput pApplyInput;
+					//		mem_zero(&pApplyInput, sizeof(pApplyInput));
+					//		pApplyInput.m_Direction = 1;
+
+					//		auto gamecontext = ((CGameContext *)GameServer());
+
+					//		// gamecontext->m_apPlayers[0]->m_Score;
+
+					//		GameServer()->OnClientPredictedInput(c, &pApplyInput);
+					//	}
+
+					//	continue;
+					//}
+
+					if(strcmp(m_aClients[c].m_aName, "heartless tee") == 0)
 					{
-						// m_Direction:
-						// 1 - Right
-						// 0 - Stay
-						// -1 - Left
+						char buf[256];
 
-						CNetObj_PlayerInput pApplyInput;
-						mem_zero(&pApplyInput, sizeof(pApplyInput));
-						pApplyInput.m_Direction = 1;
+						auto gamecontext = ((CGameContext *)GameServer());
 
-						GameServer()->OnClientPredictedInput(c, &pApplyInput);
-						continue;
+						auto player_char = gamecontext->GetPlayerChar(c);
+
+						if(player_char != nullptr)
+						{
+							auto gamelayer = gamecontext->Layers()->GameLayer();
+
+							const CTile *pTiles = static_cast<CTile *>(Kernel()->RequestInterface<IMap>()->GetData(gamelayer->m_Data));
+
+							const int Index = (int)(player_char->m_Pos.y / 32 + 1) * gamelayer->m_Width + (int)(player_char->m_Pos.x / 32);
+							const int GameIndex = pTiles[Index].m_Index;
+							sprintf(buf, "x:%f y:%f %i\n", player_char->m_Pos.x, player_char->m_Pos.y, GameIndex);
+							printf(buf);
+						}
+
+						//for(int y = 0; y < gamelayer->m_Height; y++)
+						//{
+						//	for(int x = 0; x < gamelayer->m_Width; x++)
+						//	{
+						//		const int Index = y * gamelayer->m_Width + x;
+
+						//		// Game layer
+						//		{
+						//			char buf[256];
+						//			const int GameIndex = pTiles[Index].m_Index;
+
+						//			sprintf(buf, "%i", GameIndex);
+
+						//			printf("Hello\n");
+						//		}
+						//	}
+						//}
 					}
 
 					bool ClientHadInput = false;
@@ -2806,7 +2871,7 @@ int CServer::Run()
 						if(Input.m_GameTick == Tick())
 						{
 							CNetObj_PlayerInput *pApplyInput = (CNetObj_PlayerInput *)Input.m_aData;
-							pApplyInput->m_Direction = 1;
+							//pApplyInput->m_Direction = 1;
 
 							GameServer()->OnClientPredictedInput(c, pApplyInput);
 							ClientHadInput = true;
