@@ -274,7 +274,7 @@ public:
 	CServer();
 	~CServer();
 
-	bool AddBot();
+	CPlayer *AddBot(const char *Name);
 
 	bool IsClientNameAvailable(int ClientID, const char *pNameRequest);
 	bool SetClientNameImpl(int ClientID, const char *pNameRequest, bool Set);

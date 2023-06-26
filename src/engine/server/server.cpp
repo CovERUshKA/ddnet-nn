@@ -3,6 +3,7 @@
 
 #include "server.h"
 
+#include <iostream>
 #include <base/logger.h>
 #include <base/math.h>
 #include <base/system.h>
@@ -45,6 +46,9 @@
 #include "databases/connection.h"
 #include "databases/connection_pool.h"
 #include "register.h"
+
+// Neural network
+#include <game/server/player.h>
 
 extern bool IsInterrupted();
 
@@ -2515,25 +2519,32 @@ int CServer::LoadMap(const char *pMapName)
 	return 1;
 }
 
-bool CServer::AddBot()
+CPlayer* CServer::AddBot(const char* Name)
 {
-	for(int ClientID = MAX_CLIENTS-1; ClientID < MAX_CLIENTS; ClientID--)
+	for(int ClientID = MAX_CLIENTS-1; ClientID >= 0; ClientID--)
 	{
 		if (m_aClients[ClientID].m_State == CClient::STATE_EMPTY)
 		{
 			//m_aClients[ClientID].m_aName = "Bot";
-			memcpy(m_aClients[ClientID].m_aName, "Bot", 4);
+			memcpy(m_aClients[ClientID].m_aName, Name, strlen(Name));
+
 			m_aClients[ClientID].m_State = CClient::STATE_INGAME;
 			m_aClients[ClientID].m_SnapRate = CClient::SNAPRATE_FULL;
 			m_aClients[ClientID].m_DDNetVersion = VERSION_DDRACE;
 			m_aClients[ClientID].m_pRconCmdToSend = 0;
+
 			GameServer()->OnClientConnected(ClientID, nullptr);
 			GameServer()->OnClientEnter(ClientID);
-			break;
+
+			auto gamecontext = ((CGameContext *)GameServer());
+			CPlayer *pPlayer = gamecontext->m_apPlayers[ClientID];
+			pPlayer->TryRespawn();
+
+			return pPlayer;
 		}
 	}
 
-	return true;
+	return nullptr;
 }
 
 int CServer::Run()
@@ -2645,7 +2656,7 @@ int CServer::Run()
 		dbg_msg("server", "+-------------------------+");
 	}
 
-	AddBot();
+	AddBot("Test");
 	
 	// start game
 	{
@@ -2760,6 +2771,47 @@ int CServer::Run()
 			while(t > TickStartTime(m_CurrentGameTick + 1))
 			{
 				GameServer()->OnPreTickTeehistorian();
+
+				// Handle bots
+				{
+					auto gamecontext = ((CGameContext *)GameServer());
+					auto gamelayer = gamecontext->Layers()->GameLayer();
+					const CTile *pTiles = static_cast<CTile *>(Kernel()->RequestInterface<IMap>()->GetData(gamelayer->m_Data));
+
+					// apply new input
+					for(int c = 0; c < MAX_CLIENTS; c++)
+					{
+						if(m_aClients[c].m_State != CClient::STATE_INGAME)
+							continue;
+
+						auto player_char = gamecontext->GetPlayerChar(c);
+
+						if(player_char != nullptr)
+						{
+							auto vel = player_char->Core()->m_Vel;
+							auto x_pos = player_char->m_Pos.x / 32.0f;
+							auto y_pos = player_char->m_Pos.y / 32.0f;
+
+							for(auto &Input : m_aClients[c].m_aInputs)
+							{
+								if(Input.m_GameTick == Tick() + 1)
+								{
+									CNetObj_PlayerInput *pApplyInput = (CNetObj_PlayerInput *)Input.m_aData;
+									auto is_hooking = pApplyInput->m_Hook;
+									auto direction_moving = pApplyInput->m_Direction;
+
+									break;
+								}
+							}
+
+							const int Index = (int)(y_pos + 1) * gamelayer->m_Width + (int)(x_pos);
+							const int GameIndex = pTiles[Index].m_Index;
+							//std::cout << m_aClients[c].m_aName << " " << m_aClients[c].m_Addr.ip[0] << " " << vel.x << std::endl;
+							//sprintf(buf, "x:%f y:%f %i\n", player_char->m_Pos.x, player_char->m_Pos.y, GameIndex);
+							//printf(buf);
+						}
+					}
+				}
 
 				for(int c = 0; c < MAX_CLIENTS; c++)
 				{
