@@ -24,9 +24,11 @@ void CDebugHud::RenderNetCorrections()
 	float Velspeed = length(vec2(m_pClient->m_Snap.m_pLocalCharacter->m_VelX / 256.0f, m_pClient->m_Snap.m_pLocalCharacter->m_VelY / 256.0f)) * TicksPerSecond;
 	float VelspeedX = m_pClient->m_Snap.m_pLocalCharacter->m_VelX / 256.0f * TicksPerSecond;
 	float VelspeedY = m_pClient->m_Snap.m_pLocalCharacter->m_VelY / 256.0f * TicksPerSecond;
+	int TargetX = m_pClient->m_PredictedChar.m_Input.m_TargetX;
+	int TargetY = m_pClient->m_PredictedChar.m_Input.m_TargetY;
 	float Ramp = VelocityRamp(Velspeed, m_pClient->m_aTuning[g_Config.m_ClDummy].m_VelrampStart, m_pClient->m_aTuning[g_Config.m_ClDummy].m_VelrampRange, m_pClient->m_aTuning[g_Config.m_ClDummy].m_VelrampCurvature);
 
-	static const char *s_apStrings[] = {"velspeed:", "velspeed.x*ramp:", "velspeed.y:", "ramp:", "checkpoint:", "Pos", " x:", " y:", "angle:", "netobj corrections", " num:", " on:"};
+	static const char *s_apStrings[] = {"velspeed:", "velspeed.x*ramp:", "velspeed.y:", "ramp:", "checkpoint:", "Pos", " x:", " y:", "angle:", "netobj corrections", " num:", " on:", "target.x:", "target.y:"};
 	const int Num = std::size(s_apStrings);
 	const float LineHeight = 6.0f;
 	const float Fontsize = 5.0f;
@@ -79,6 +81,14 @@ void CDebugHud::RenderNetCorrections()
 	y += LineHeight;
 	w = TextRender()->TextWidth(0, Fontsize, m_pClient->NetobjCorrectedOn(), -1, -1.0f);
 	TextRender()->Text(0, x - w, y, Fontsize, m_pClient->NetobjCorrectedOn(), -1.0f);
+	y += LineHeight;
+	str_format(aBuf, sizeof(aBuf), "%d", TargetX);
+	w = TextRender()->TextWidth(0, Fontsize, aBuf, -1, -1.0f);
+	TextRender()->Text(0, x - w, y, Fontsize, aBuf, -1.0f);
+	y += LineHeight;
+	str_format(aBuf, sizeof(aBuf), "%d", TargetY);
+	w = TextRender()->TextWidth(0, Fontsize, aBuf, -1, -1.0f);
+	TextRender()->Text(0, x - w, y, Fontsize, aBuf, -1.0f);
 }
 
 void CDebugHud::RenderTuning()
