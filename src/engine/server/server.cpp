@@ -2713,7 +2713,7 @@ int CServer::Run()
 	{
 		bool NonActive = false;
 		bool PacketWaiting = false;
-		bool SpeedUpTicks = true;
+		bool SpeedUpTicks = false;
 
 		int ticks_per_second = 0;
 		int start_ticks = m_CurrentGameTick;
