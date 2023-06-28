@@ -2547,6 +2547,57 @@ CPlayer* CServer::AddBot(const char* Name)
 	return nullptr;
 }
 
+vec2 angle_to_coords(int angle)
+{
+	angle -= 402;
+	auto reversed = (float)angle / 256.0f;
+	// cout << (float)angle / 256.0f << endl;
+	int x = (int)(round(cos(reversed) * 299.0f));
+	int y = (int)(round(sin(reversed) * 299.0f));
+	//cout << x << endl;
+	//cout << y << endl;
+
+	return vec2(x, y);
+}
+
+int coords_to_angle(float x, float y)
+{
+	auto TmpAngle = atan2f(y, x);
+
+	int m_Angle = 0;
+	//cout << m_Angle << endl;
+
+	constexpr float pi = 3.1415926535897932384626433f;
+
+	if(TmpAngle < -(pi / 2.0f))
+	{
+		m_Angle = (int)((TmpAngle + (2.0f * pi)) * 256.0f);
+		//cout << m_Angle << endl;
+	}
+	else
+	{
+		m_Angle = (int)(TmpAngle * 256.0f);
+		//cout << m_Angle << endl;
+	}
+
+	return m_Angle + 402;
+}
+
+int calc_angles_distance(int angle_1, int angle_2)
+{
+	int max = 1205 + 402;
+	int max_half = 804;
+
+	int dist = abs(angle_1 - angle_2);
+
+	if(dist >= max_half)
+	{
+		dist = max - dist;
+	}
+
+	return dist;
+}
+
 int CServer::Run()
 {
 	if(m_RunServer == UNINITIALIZED)
@@ -2656,12 +2707,17 @@ int CServer::Run()
 		dbg_msg("server", "+-------------------------+");
 	}
 
-	AddBot("Test");
+	AddBot("Bot");
 	
 	// start game
 	{
 		bool NonActive = false;
 		bool PacketWaiting = false;
+
+		int ticks_per_second = 0;
+		int start_ticks = m_CurrentGameTick;
+		
+		auto ticks_timer = time_get();
 
 		m_GameStartTime = time_get();
 
@@ -2772,9 +2828,10 @@ int CServer::Run()
 			{
 				GameServer()->OnPreTickTeehistorian();
 
+				auto gamecontext = ((CGameContext *)GameServer());
+
 				// Handle bots
 				{
-					auto gamecontext = ((CGameContext *)GameServer());
 					auto gamelayer = gamecontext->Layers()->GameLayer();
 					const CTile *pTiles = static_cast<CTile *>(Kernel()->RequestInterface<IMap>()->GetData(gamelayer->m_Data));
 
@@ -2840,43 +2897,85 @@ int CServer::Run()
 						continue;
 
 					// Move bot wherever you want
-					//if(strcmp(m_aClients[c].m_aName, "Bot") == 0)
-					//{
-					//	// m_Direction:
-					//	// 1 - Right
-					//	// 0 - Stay
-					//	// -1 - Left
+					if(strcmp(m_aClients[c].m_aName, "Bot") == 0)
+					{
+						// m_Direction:
+						// 1 - Right
+						// 0 - Stay
+						// -1 - Left
 
-					//	//#include <>
-					//	if(strcmp(m_aClients[0].m_aName, "heartless tee") == 0)
-					//	{
-					//		for(auto &Input : m_aClients[0].m_aInputs)
-					//		{
-					//			if(Input.m_GameTick == Tick())
-					//			{
-					//				CNetObj_PlayerInput pApplyInput;
-					//				mem_zero(&pApplyInput, sizeof(pApplyInput));
-					//				memcpy(&pApplyInput, Input.m_aData, sizeof(pApplyInput));
-					//				GameServer()->OnClientPredictedInput(c, &pApplyInput);
-					//				break;
-					//			}
-					//		}
-					//	}
-					//	else
-					//	{
-					//		CNetObj_PlayerInput pApplyInput;
-					//		mem_zero(&pApplyInput, sizeof(pApplyInput));
-					//		pApplyInput.m_Direction = 1;
+						static int angle = 0;
 
-					//		auto gamecontext = ((CGameContext *)GameServer());
+						auto coords = angle_to_coords(angle);
 
-					//		// gamecontext->m_apPlayers[0]->m_Score;
+						angle += 1;
+						angle %= 1608;
 
-					//		GameServer()->OnClientPredictedInput(c, &pApplyInput);
-					//	}
+						vec2 center_coords = vec2(24.5f * 32.0f, 20.5f * 32.0f);
 
-					//	continue;
-					//}
+						auto bot_character = gamecontext->GetPlayerChar(c);
+
+						if(bot_character != nullptr)
+						{
+							vec2 bot_pos = bot_character->m_Pos;
+							/*std::cout << bot_pos.x
+							     << " " << bot_pos.y << std::endl;*/
+
+							vec2 delta_coords = center_coords - bot_pos;
+
+							int should_angle = coords_to_angle(delta_coords.x, delta_coords.y);
+
+							int reward = -calc_angles_distance(angle, should_angle);
+
+							/*std::cout << delta_coords.x
+								  << " " << delta_coords.y
+								<< " Actual: " << angle
+								     << " Should be: " << should_angle
+								  << " Reward: " << reward << std::endl;*/
+						}
+						
+						CNetObj_PlayerInput pApplyInput;
+						mem_zero(&pApplyInput, sizeof(pApplyInput));
+						pApplyInput.m_TargetX = coords.x;
+						pApplyInput.m_TargetY = coords.y;
+
+						// auto gamecontext = ((CGameContext *)GameServer());
+
+						// gamecontext->m_apPlayers[0]->m_Score;
+
+						GameServer()->OnClientPredictedInput(c, &pApplyInput);
+
+						//#include <>
+						//if(strcmp(m_aClients[0].m_aName, "heartless tee") == 0)
+						//{
+						//	for(auto &Input : m_aClients[0].m_aInputs)
+						//	{
+						//		if(Input.m_GameTick == Tick())
+						//		{
+						//			CNetObj_PlayerInput pApplyInput;
+						//			mem_zero(&pApplyInput, sizeof(pApplyInput));
+						//			memcpy(&pApplyInput, Input.m_aData, sizeof(pApplyInput));
+						//			GameServer()->OnClientPredictedInput(c, &pApplyInput);
+						//			break;
+						//		}
+						//	}
+						//}
+						//else
+						//{
+						//	CNetObj_PlayerInput pApplyInput;
+						//	mem_zero(&pApplyInput, sizeof(pApplyInput));
+						//	pApplyInput.m_TargetX = coords.x;
+						//	pApplyInput.m_TargetY = coords.y;
+
+						//	//auto gamecontext = ((CGameContext *)GameServer());
+
+						//	// gamecontext->m_apPlayers[0]->m_Score;
+
+						//	GameServer()->OnClientPredictedInput(c, &pApplyInput);
+						//}
+
+						continue;
+					}
 
 					if(strcmp(m_aClients[c].m_aName, "heartless tee") == 0)
 					{
@@ -2939,6 +3038,14 @@ int CServer::Run()
 				{
 					break;
 				}
+			}
+
+			if((time_get()  - ticks_timer) / time_freq() >= 1.0f)
+			{
+				ticks_per_second = m_CurrentGameTick - start_ticks;
+				std::cout << ticks_per_second << std::endl;
+				start_ticks = m_CurrentGameTick;
+				ticks_timer = time_get();
 			}
 
 			// snap game
