@@ -2713,6 +2713,7 @@ int CServer::Run()
 	{
 		bool NonActive = false;
 		bool PacketWaiting = false;
+		bool SpeedUpTicks = true;
 
 		int ticks_per_second = 0;
 		int start_ticks = m_CurrentGameTick;
@@ -2824,7 +2825,7 @@ int CServer::Run()
 				}
 			}
 
-			while(t > TickStartTime(m_CurrentGameTick + 1))
+			while(t > TickStartTime(m_CurrentGameTick + 1) || SpeedUpTicks)
 			{
 				GameServer()->OnPreTickTeehistorian();
 
@@ -3038,6 +3039,11 @@ int CServer::Run()
 				{
 					break;
 				}
+
+				if(SpeedUpTicks)
+				{
+					break;
+				}
 			}
 
 			if((time_get()  - ticks_timer) / time_freq() >= 1.0f)
@@ -3083,35 +3089,39 @@ int CServer::Run()
 				}
 			}
 
-			// wait for incoming data
-			if(NonActive)
+			if(!SpeedUpTicks)
 			{
-				if(Config()->m_SvReloadWhenEmpty == 1)
+				// wait for incoming data
+				if(NonActive)
 				{
-					m_MapReload = true;
-					Config()->m_SvReloadWhenEmpty = 0;
-				}
-				else if(Config()->m_SvReloadWhenEmpty == 2 && !m_ReloadedWhenEmpty)
-				{
-					m_MapReload = true;
-					m_ReloadedWhenEmpty = true;
-				}
+					if(Config()->m_SvReloadWhenEmpty == 1)
+					{
+						m_MapReload = true;
+						Config()->m_SvReloadWhenEmpty = 0;
+					}
+					else if(Config()->m_SvReloadWhenEmpty == 2 && !m_ReloadedWhenEmpty)
+					{
+						m_MapReload = true;
+						m_ReloadedWhenEmpty = true;
+					}
 
-				if(Config()->m_SvShutdownWhenEmpty)
-					m_RunServer = STOPPING;
+					if(Config()->m_SvShutdownWhenEmpty)
+						m_RunServer = STOPPING;
+					else
+						PacketWaiting = net_socket_read_wait(m_NetServer.Socket(), 1000000);
+				}
 				else
-					PacketWaiting = net_socket_read_wait(m_NetServer.Socket(), 1000000);
-			}
-			else
-			{
-				m_ReloadedWhenEmpty = false;
+				{
+					m_ReloadedWhenEmpty = false;
 
-				set_new_tick();
-				t = time_get();
-				int x = (TickStartTime(m_CurrentGameTick + 1) - t) * 1000000 / time_freq() + 1;
+					set_new_tick();
+					t = time_get();
+					int x = (TickStartTime(m_CurrentGameTick + 1) - t) * 1000000 / time_freq() + 1;
 
-				PacketWaiting = x > 0 ? net_socket_read_wait(m_NetServer.Socket(), x) : true;
+					PacketWaiting = x > 0 ? net_socket_read_wait(m_NetServer.Socket(), x) : true;
+				}
 			}
+
 			if(IsInterrupted())
 			{
 				Console()->Print(IConsole::OUTPUT_LEVEL_STANDARD, "server", "interrupted");
