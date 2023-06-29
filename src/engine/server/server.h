@@ -275,6 +275,7 @@ public:
 	~CServer();
 
 	CPlayer *AddBot(const char *Name);
+	int TestNN();
 
 	bool IsClientNameAvailable(int ClientID, const char *pNameRequest);
 	bool SetClientNameImpl(int ClientID, const char *pNameRequest, bool Set);

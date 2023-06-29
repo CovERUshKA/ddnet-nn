@@ -179,9 +179,9 @@ int CDemoRecorder::Start(class IStorage *pStorage, class IConsole *pConsole, con
 
 	if(m_pConsole)
 	{
-		char aBuf[256];
-		str_format(aBuf, sizeof(aBuf), "Recording to '%s'", pFilename);
-		m_pConsole->Print(IConsole::OUTPUT_LEVEL_STANDARD, "demo_recorder", aBuf, gs_DemoPrintColor);
+		//char aBuf[256];
+		//str_format(aBuf, sizeof(aBuf), "Recording to '%s'", pFilename);
+		//m_pConsole->Print(IConsole::OUTPUT_LEVEL_STANDARD, "demo_recorder", aBuf, gs_DemoPrintColor);
 	}
 	m_File = DemoFile;
 	str_copy(m_aCurrentFilename, pFilename);
@@ -363,8 +363,8 @@ int CDemoRecorder::Stop()
 
 	io_close(m_File);
 	m_File = 0;
-	if(m_pConsole)
-		m_pConsole->Print(IConsole::OUTPUT_LEVEL_STANDARD, "demo_recorder", "Stopped recording", gs_DemoPrintColor);
+	//if(m_pConsole)
+		//m_pConsole->Print(IConsole::OUTPUT_LEVEL_STANDARD, "demo_recorder", "Stopped recording", gs_DemoPrintColor);
 
 	return 0;
 }

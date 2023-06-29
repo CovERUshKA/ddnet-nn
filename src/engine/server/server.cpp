@@ -49,6 +49,7 @@
 
 // Neural network
 #include <game/server/player.h>
+#include <EvolutionNet/EvolutionNet.hpp>
 
 extern bool IsInterrupted();
 
@@ -910,13 +911,13 @@ void CServer::DoSnapshot()
 		if(m_aClients[i].m_State != CClient::STATE_INGAME)
 			continue;
 
-		// this client is trying to recover, don't spam snapshots
-		if(m_aClients[i].m_SnapRate == CClient::SNAPRATE_RECOVER && (Tick() % 50) != 0)
-			continue;
+		//// this client is trying to recover, don't spam snapshots
+		//if(m_aClients[i].m_SnapRate == CClient::SNAPRATE_RECOVER && (Tick() % 50) != 0)
+		//	continue;
 
-		// this client is trying to recover, don't spam snapshots
-		if(m_aClients[i].m_SnapRate == CClient::SNAPRATE_INIT && (Tick() % 10) != 0)
-			continue;
+		//// this client is trying to recover, don't spam snapshots
+		//if(m_aClients[i].m_SnapRate == CClient::SNAPRATE_INIT && (Tick() % 10) != 0)
+		//	continue;
 
 		{
 			m_SnapshotBuilder.Init(m_aClients[i].m_Sixup);
@@ -2519,6 +2520,11 @@ int CServer::LoadMap(const char *pMapName)
 	return 1;
 }
 
+unsigned long long GenerateSeed()
+{
+	return std::chrono::system_clock::now().time_since_epoch().count();
+}
+
 CPlayer* CServer::AddBot(const char* Name)
 {
 	for(int ClientID = MAX_CLIENTS-1; ClientID >= 0; ClientID--)
@@ -2526,7 +2532,7 @@ CPlayer* CServer::AddBot(const char* Name)
 		if (m_aClients[ClientID].m_State == CClient::STATE_EMPTY)
 		{
 			//m_aClients[ClientID].m_aName = "Bot";
-			memcpy(m_aClients[ClientID].m_aName, Name, strlen(Name));
+			memcpy(m_aClients[ClientID].m_aName, Name, strlen(Name)+1);
 
 			m_aClients[ClientID].m_State = CClient::STATE_INGAME;
 			m_aClients[ClientID].m_SnapRate = CClient::SNAPRATE_FULL;
@@ -2539,6 +2545,10 @@ CPlayer* CServer::AddBot(const char* Name)
 			auto gamecontext = ((CGameContext *)GameServer());
 			CPlayer *pPlayer = gamecontext->m_apPlayers[ClientID];
 			pPlayer->TryRespawn();
+
+			char aFilename[IO_MAX_PATH_LENGTH];
+			str_format(aFilename, sizeof(aFilename), "demos/%s_%d_%d_%llu_tmp.demo", m_aCurrentMap, m_NetServer.Address().port, ClientID, GenerateSeed());
+			m_aDemoRecorder[ClientID].Start(Storage(), Console(), aFilename, GameServer()->NetVersion(), m_aCurrentMap, &m_aCurrentMapSha256[MAP_TYPE_SIX], m_aCurrentMapCrc[MAP_TYPE_SIX], "server", m_aCurrentMapSize[MAP_TYPE_SIX], m_apCurrentMapData[MAP_TYPE_SIX]);
 
 			return pPlayer;
 		}
@@ -2596,6 +2606,268 @@ int calc_angles_distance(int angle_1, int angle_2)
 	}
 
 	return dist;
+}
+
+int CServer::TestNN()
+{
+	int score = 0;
+
+	int start_tick = m_CurrentGameTick;
+
+	while(true)
+	{
+		//GameServer()->OnPreTickTeehistorian();
+
+		auto gamecontext = ((CGameContext *)GameServer());
+
+		// Handle bots
+		{
+			auto gamelayer = gamecontext->Layers()->GameLayer();
+			const CTile *pTiles = static_cast<CTile *>(Kernel()->RequestInterface<IMap>()->GetData(gamelayer->m_Data));
+
+			// apply new input
+			for(int c = 0; c < MAX_CLIENTS; c++)
+			{
+				if(m_aClients[c].m_State != CClient::STATE_INGAME)
+					continue;
+
+				// Move bot wherever you want
+				if(strcmp(m_aClients[c].m_aName, "Bot") == 0)
+				{
+					vec2 center_coords = vec2(24.5f * 32.0f, 20.5f * 32.0f);
+
+					auto bot_character = gamecontext->GetPlayerChar(c);
+
+					if(bot_character != nullptr)
+					{
+						vec2 bot_pos = bot_character->m_Pos;
+						/*std::cout << bot_pos.x
+						     << " " << bot_pos.y << std::endl;*/
+
+						vec2 delta_coords = center_coords - bot_pos;
+
+						// bot_character->Core()->m_Angle
+
+						int should_angle = coords_to_angle(delta_coords.x, delta_coords.y);
+						int actual_angle = bot_character->Core()->m_Angle + 402;
+
+						int reward = -calc_angles_distance(actual_angle, should_angle);
+						// std::cout << actual_angle << " " << reward << std::endl;
+
+						/*std::cout << delta_coords.x
+							  << " " << delta_coords.y
+							<< " Actual: " << angle
+							     << " Should be: " << should_angle
+							  << " Reward: " << reward << std::endl;*/
+					}
+				}
+
+				// auto player_char = gamecontext->GetPlayerChar(c);
+
+				// if(player_char != nullptr)
+				//{
+				//	auto vel = player_char->Core()->m_Vel;
+				//	auto x_pos = player_char->m_Pos.x / 32.0f;
+				//	auto y_pos = player_char->m_Pos.y / 32.0f;
+
+				//	for(auto &Input : m_aClients[c].m_aInputs)
+				//	{
+				//		if(Input.m_GameTick == Tick() + 1)
+				//		{
+				//			CNetObj_PlayerInput *pApplyInput = (CNetObj_PlayerInput *)Input.m_aData;
+				//			auto is_hooking = pApplyInput->m_Hook;
+				//			auto direction_moving = pApplyInput->m_Direction;
+
+				//			break;
+				//		}
+				//	}
+
+				//	const int Index = (int)(y_pos + 1) * gamelayer->m_Width + (int)(x_pos);
+				//	const int GameIndex = pTiles[Index].m_Index;
+				//	//std::cout << m_aClients[c].m_aName << " " << m_aClients[c].m_Addr.ip[0] << " " << vel.x << std::endl;
+				//	//sprintf(buf, "x:%f y:%f %i\n", player_char->m_Pos.x, player_char->m_Pos.y, GameIndex);
+				//	//printf(buf);
+				//}
+			}
+		}
+
+		for(int c = 0; c < MAX_CLIENTS; c++)
+		{
+			if(m_aClients[c].m_State != CClient::STATE_INGAME)
+				continue;
+			bool ClientHadInput = false;
+			for(auto &Input : m_aClients[c].m_aInputs)
+			{
+				if(Input.m_GameTick == Tick() + 1)
+				{
+					GameServer()->OnClientPredictedEarlyInput(c, Input.m_aData);
+					ClientHadInput = true;
+				}
+			}
+			if(!ClientHadInput)
+				GameServer()->OnClientPredictedEarlyInput(c, nullptr);
+		}
+
+		set_new_tick();
+
+		m_CurrentGameTick++;
+
+		// apply new input
+		for(int c = 0; c < MAX_CLIENTS; c++)
+		{
+			if(m_aClients[c].m_State != CClient::STATE_INGAME)
+				continue;
+
+			// Move bot wherever you want
+			if(strcmp(m_aClients[c].m_aName, "Bot") == 0)
+			{
+				// m_Direction:
+				// 1 - Right
+				// 0 - Stay
+				// -1 - Left
+
+				static int angle = 0;
+
+				auto coords = angle_to_coords(angle);
+
+				angle += 1;
+				angle %= 1608;
+
+				vec2 center_coords = vec2(24.5f * 32.0f, 20.5f * 32.0f);
+
+				auto bot_character = gamecontext->GetPlayerChar(c);
+
+				if(bot_character != nullptr)
+				{
+					vec2 bot_pos = bot_character->m_Pos;
+					/*std::cout << bot_pos.x
+					     << " " << bot_pos.y << std::endl;*/
+
+					vec2 delta_coords = center_coords - bot_pos;
+
+					int should_angle = coords_to_angle(delta_coords.x, delta_coords.y);
+
+					int reward = -calc_angles_distance(angle, should_angle);
+
+					/*std::cout << delta_coords.x
+						  << " " << delta_coords.y
+						<< " Actual: " << angle
+						     << " Should be: " << should_angle
+						  << " Reward: " << reward << std::endl;*/
+				}
+
+				CNetObj_PlayerInput pApplyInput;
+				mem_zero(&pApplyInput, sizeof(pApplyInput));
+				pApplyInput.m_TargetX = coords.x;
+				pApplyInput.m_TargetY = coords.y;
+
+				// auto gamecontext = ((CGameContext *)GameServer());
+
+				// gamecontext->m_apPlayers[0]->m_Score;
+
+				GameServer()->OnClientPredictedInput(c, &pApplyInput);
+
+				// #include <>
+				// if(strcmp(m_aClients[0].m_aName, "heartless tee") == 0)
+				//{
+				//	for(auto &Input : m_aClients[0].m_aInputs)
+				//	{
+				//		if(Input.m_GameTick == Tick())
+				//		{
+				//			CNetObj_PlayerInput pApplyInput;
+				//			mem_zero(&pApplyInput, sizeof(pApplyInput));
+				//			memcpy(&pApplyInput, Input.m_aData, sizeof(pApplyInput));
+				//			GameServer()->OnClientPredictedInput(c, &pApplyInput);
+				//			break;
+				//		}
+				//	}
+				// }
+				// else
+				//{
+				//	CNetObj_PlayerInput pApplyInput;
+				//	mem_zero(&pApplyInput, sizeof(pApplyInput));
+				//	pApplyInput.m_TargetX = coords.x;
+				//	pApplyInput.m_TargetY = coords.y;
+
+				//	//auto gamecontext = ((CGameContext *)GameServer());
+
+				//	// gamecontext->m_apPlayers[0]->m_Score;
+
+				//	GameServer()->OnClientPredictedInput(c, &pApplyInput);
+				//}
+
+				continue;
+			}
+
+			if(strcmp(m_aClients[c].m_aName, "heartless tee") == 0)
+			{
+				char buf[256];
+
+				auto gamecontext = ((CGameContext *)GameServer());
+
+				auto player_char = gamecontext->GetPlayerChar(c);
+
+				if(player_char != nullptr)
+				{
+					auto gamelayer = gamecontext->Layers()->GameLayer();
+
+					const CTile *pTiles = static_cast<CTile *>(Kernel()->RequestInterface<IMap>()->GetData(gamelayer->m_Data));
+
+					const int Index = (int)(player_char->m_Pos.y / 32 + 1) * gamelayer->m_Width + (int)(player_char->m_Pos.x / 32);
+					const int GameIndex = pTiles[Index].m_Index;
+					sprintf(buf, "x:%f y:%f %i\n", player_char->m_Pos.x, player_char->m_Pos.y, GameIndex);
+					printf(buf);
+				}
+
+				// for(int y = 0; y < gamelayer->m_Height; y++)
+				//{
+				//	for(int x = 0; x < gamelayer->m_Width; x++)
+				//	{
+				//		const int Index = y * gamelayer->m_Width + x;
+
+				//		// Game layer
+				//		{
+				//			char buf[256];
+				//			const int GameIndex = pTiles[Index].m_Index;
+
+				//			sprintf(buf, "%i", GameIndex);
+
+				//			printf("Hello\n");
+				//		}
+				//	}
+				//}
+			}
+
+			bool ClientHadInput = false;
+			for(auto &Input : m_aClients[c].m_aInputs)
+			{
+				if(Input.m_GameTick == Tick())
+				{
+					CNetObj_PlayerInput *pApplyInput = (CNetObj_PlayerInput *)Input.m_aData;
+					// pApplyInput->m_Direction = 1;
+
+					GameServer()->OnClientPredictedInput(c, pApplyInput);
+					ClientHadInput = true;
+					break;
+				}
+			}
+			if(!ClientHadInput)
+				GameServer()->OnClientPredictedInput(c, nullptr);
+		}
+
+		GameServer()->OnTick();
+		if(ErrorShutdown())
+		{
+			break;
+		}
+
+		/*if(SpeedUpTicks)
+		{
+			break;
+		}*/
+	}
+
+	return 0;
 }
 
 int CServer::Run()
@@ -2707,16 +2979,33 @@ int CServer::Run()
 		dbg_msg("server", "+-------------------------+");
 	}
 
-	AddBot("Bot");
+	auto bot = AddBot("Bot");
 	
 	// start game
 	{
 		bool NonActive = false;
 		bool PacketWaiting = false;
-		bool SpeedUpTicks = false;
+		bool SpeedUpTicks = true;
 
 		int ticks_per_second = 0;
 		int start_ticks = m_CurrentGameTick;
+
+		// Neural network
+		static constexpr int NumInput = 2;
+		static constexpr int NumOutput = 1;
+		static constexpr bool Bias = true;
+		static constexpr float ThresholdFitness = -300.f;
+		static constexpr std::size_t PopulationSize = 300;
+		auto rndSeed = ::GenerateSeed();
+
+		using ParamConfig = EvolutionNet::DefaultParamConfig;
+		using EvolutionNetT = EvolutionNet::EvolutionNet<NumInput, NumOutput, Bias, ParamConfig>;
+		using Network = EvolutionNetT::NetworkT;
+		using FitnessScore = EvolutionNet::FitnessScore;
+
+		EvolutionNetT evolutionNet;
+
+		evolutionNet.initialize(PopulationSize, rndSeed);
 		
 		auto ticks_timer = time_get();
 
@@ -2808,7 +3097,7 @@ int CServer::Run()
 						{
 							// entry found -> blacklisted
 							m_aClients[ClientID].m_DnsblState = CClient::DNSBL_STATE_BLACKLISTED;
-
+							
 							// console output
 							char aAddrStr[NETADDR_MAXSTRSIZE];
 							net_addr_str(m_NetServer.ClientAddr(ClientID), aAddrStr, sizeof(aAddrStr), true);
@@ -2823,6 +3112,203 @@ int CServer::Run()
 						Config()->m_SvDnsblBan)
 						m_NetServer.NetBan()->BanAddr(m_NetServer.ClientAddr(ClientID), 60 * 10, "VPN detected, try connecting without. Contact admin if mistaken");
 				}
+			}
+
+			while(true)
+			{
+				evolutionNet.evaluateAll([this, bot](Network *network) {
+					FitnessScore score = 0.f;
+
+					int start_tick = m_CurrentGameTick;
+
+					auto gamecontext = ((CGameContext *)GameServer());
+
+					int bot_id = bot->GetCID();
+
+					// reset input
+					for(auto &Input : m_aClients[bot_id].m_aInputs)
+						Input.m_GameTick = -1;
+					m_aClients[bot_id].m_CurrentInput = 0;
+					mem_zero(&m_aClients[bot_id].m_LatestInput, sizeof(m_aClients[bot_id].m_LatestInput));
+
+					//bot->Respawn();
+					bot->KillCharacter();
+					bot->TryRespawn();
+
+					char aFilename[IO_MAX_PATH_LENGTH];
+					str_format(aFilename, sizeof(aFilename), "demos/%s_%d_%d_%llu_tmp.demo", m_aCurrentMap, m_NetServer.Address().port, bot_id, GenerateSeed());
+					m_aDemoRecorder[bot_id].Start(Storage(), Console(), aFilename, GameServer()->NetVersion(), m_aCurrentMap, &m_aCurrentMapSha256[MAP_TYPE_SIX], m_aCurrentMapCrc[MAP_TYPE_SIX], "server", m_aCurrentMapSize[MAP_TYPE_SIX], m_apCurrentMapData[MAP_TYPE_SIX]);
+
+					//m_aClients[bot_id].Reset();
+
+					while(true)
+					{
+						for(int c = 0; c < MAX_CLIENTS; c++)
+						{
+							if(m_aClients[c].m_State != CClient::STATE_INGAME)
+								continue;
+							bool ClientHadInput = false;
+							for(auto &Input : m_aClients[c].m_aInputs)
+							{
+								if(Input.m_GameTick == Tick() + 1)
+								{
+									GameServer()->OnClientPredictedEarlyInput(c, Input.m_aData);
+									ClientHadInput = true;
+								}
+							}
+							if(!ClientHadInput)
+								GameServer()->OnClientPredictedEarlyInput(c, nullptr);
+						}
+
+						set_new_tick();
+
+						m_CurrentGameTick++;
+
+						// apply new input
+						for(int c = 0; c < MAX_CLIENTS; c++)
+						{
+							if(m_aClients[c].m_State != CClient::STATE_INGAME)
+								continue;
+
+							//std::cout << m_aClients[c].m_aName << std::endl;
+
+							// Move bot wherever you want
+							if(strcmp(m_aClients[c].m_aName, "Bot") == 0)
+							{
+								// m_Direction:
+								// 1 - Right
+								// 0 - Stay
+								// -1 - Left
+
+								CNetObj_PlayerInput pApplyInput;
+								mem_zero(&pApplyInput, sizeof(pApplyInput));
+
+								vec2 center_coords = vec2(24.5f * 32.0f, 20.5f * 32.0f);
+
+								auto bot_character = gamecontext->GetPlayerChar(c);
+
+								//std::cout << "HERE" << std::endl;
+
+								if(bot_character != nullptr)
+								{
+									vec2 bot_pos = bot_character->m_Pos;
+									/*std::cout << bot_pos.x
+									     << " " << bot_pos.y << std::endl;*/
+
+									vec2 delta_coords = center_coords - bot_pos;
+
+									int should_angle = coords_to_angle(delta_coords.x, delta_coords.y);
+
+									static int max_x = 45 * 32;
+									static int max_y = 36 * 32;
+
+									network->setInputValue(0, bot_pos.x / max_x);
+									network->setInputValue(1, bot_pos.y / max_y);
+
+									network->feedForward<ParamConfig>();
+
+									const float output = network->getOutputValue(0);
+									assert(output >= 0.f && output <= 1.f);
+
+									int angle = output * 1607;
+
+									int reward = -calc_angles_distance(angle, should_angle);
+
+									//std::cout << reward << std::endl;
+
+									score += reward;
+									
+									auto coords = angle_to_coords(angle);
+
+									pApplyInput.m_TargetX = coords.x;
+									pApplyInput.m_TargetY = coords.y;
+
+									GameServer()->OnClientPredictedInput(c, &pApplyInput);
+
+									/*std::cout << delta_coords.x
+										  << " " << delta_coords.y
+										<< " Actual: " << angle
+										     << " Should be: " << should_angle
+										  << " Reward: " << reward << std::endl;*/
+								}
+								else
+								{
+									GameServer()->OnClientPredictedInput(c, nullptr);
+								}
+
+								// auto gamecontext = ((CGameContext *)GameServer());
+
+								// gamecontext->m_apPlayers[0]->m_Score;
+
+								continue;
+							}
+
+							bool ClientHadInput = false;
+							for(auto &Input : m_aClients[c].m_aInputs)
+							{
+								if(Input.m_GameTick == Tick())
+								{
+									CNetObj_PlayerInput *pApplyInput = (CNetObj_PlayerInput *)Input.m_aData;
+									// pApplyInput->m_Direction = 1;
+
+									GameServer()->OnClientPredictedInput(c, pApplyInput);
+									ClientHadInput = true;
+									break;
+								}
+							}
+							if(!ClientHadInput)
+								GameServer()->OnClientPredictedInput(c, nullptr);
+						}
+
+						GameServer()->OnTick();
+						if(ErrorShutdown())
+						{
+							//std::cout << "BEARKED" << std::endl;
+							break;
+						}
+
+						if(Config()->m_SvHighBandwidth || (m_CurrentGameTick % 2) == 0)
+						{
+							DoSnapshot();
+						}
+
+						if(m_CurrentGameTick - start_tick >= 300)
+						{
+							static float maxx_record = -99999;
+							m_aDemoRecorder[bot_id].Stop();
+							if(score <= maxx_record)
+							{
+								Storage()->RemoveFile(aFilename, IStorage::TYPE_SAVE);
+							}
+							else
+							{
+								maxx_record = score;
+							}
+							//std::cout << m_CurrentGameTick << " " << start_tick << " ENDED" << std::endl;
+							break;
+						}
+
+						/*if(SpeedUpTicks)
+						{
+							break;
+						}*/
+					}
+
+					//score /= 300.f;
+
+					//std::cout << score << std::endl;
+
+					network->setFitness(score);
+				});
+
+				std::cout << "Fitness Current Generation (" << evolutionNet.getCounterGeneration() << "): " << evolutionNet.getBestFitness() << std::endl;
+
+				if(evolutionNet.getBestFitness() >= ThresholdFitness && evolutionNet.getBestFitness() < -1.f)
+				{
+					break;
+				}
+
+				evolutionNet.evolve();
 			}
 
 			while(t > TickStartTime(m_CurrentGameTick + 1) || SpeedUpTicks)
@@ -2842,32 +3328,63 @@ int CServer::Run()
 						if(m_aClients[c].m_State != CClient::STATE_INGAME)
 							continue;
 
-						auto player_char = gamecontext->GetPlayerChar(c);
-
-						if(player_char != nullptr)
+						// Move bot wherever you want
+						if(strcmp(m_aClients[c].m_aName, "Bot") == 0)
 						{
-							auto vel = player_char->Core()->m_Vel;
-							auto x_pos = player_char->m_Pos.x / 32.0f;
-							auto y_pos = player_char->m_Pos.y / 32.0f;
+							vec2 center_coords = vec2(24.5f * 32.0f, 20.5f * 32.0f);
 
-							for(auto &Input : m_aClients[c].m_aInputs)
+							auto bot_character = gamecontext->GetPlayerChar(c);
+
+							if(bot_character != nullptr)
 							{
-								if(Input.m_GameTick == Tick() + 1)
-								{
-									CNetObj_PlayerInput *pApplyInput = (CNetObj_PlayerInput *)Input.m_aData;
-									auto is_hooking = pApplyInput->m_Hook;
-									auto direction_moving = pApplyInput->m_Direction;
+								vec2 bot_pos = bot_character->m_Pos;
+								/*std::cout << bot_pos.x
+								     << " " << bot_pos.y << std::endl;*/
 
-									break;
-								}
+								vec2 delta_coords = center_coords - bot_pos;
+
+								//bot_character->Core()->m_Angle
+
+								int should_angle = coords_to_angle(delta_coords.x, delta_coords.y);
+								int actual_angle = bot_character->Core()->m_Angle+402;	
+
+								int reward = -calc_angles_distance(actual_angle, should_angle);
+								//std::cout << actual_angle << " " << reward << std::endl;
+
+								/*std::cout << delta_coords.x
+									  << " " << delta_coords.y
+									<< " Actual: " << angle
+									     << " Should be: " << should_angle
+									  << " Reward: " << reward << std::endl;*/
 							}
-
-							const int Index = (int)(y_pos + 1) * gamelayer->m_Width + (int)(x_pos);
-							const int GameIndex = pTiles[Index].m_Index;
-							//std::cout << m_aClients[c].m_aName << " " << m_aClients[c].m_Addr.ip[0] << " " << vel.x << std::endl;
-							//sprintf(buf, "x:%f y:%f %i\n", player_char->m_Pos.x, player_char->m_Pos.y, GameIndex);
-							//printf(buf);
 						}
+
+						//auto player_char = gamecontext->GetPlayerChar(c);
+
+						//if(player_char != nullptr)
+						//{
+						//	auto vel = player_char->Core()->m_Vel;
+						//	auto x_pos = player_char->m_Pos.x / 32.0f;
+						//	auto y_pos = player_char->m_Pos.y / 32.0f;
+
+						//	for(auto &Input : m_aClients[c].m_aInputs)
+						//	{
+						//		if(Input.m_GameTick == Tick() + 1)
+						//		{
+						//			CNetObj_PlayerInput *pApplyInput = (CNetObj_PlayerInput *)Input.m_aData;
+						//			auto is_hooking = pApplyInput->m_Hook;
+						//			auto direction_moving = pApplyInput->m_Direction;
+
+						//			break;
+						//		}
+						//	}
+
+						//	const int Index = (int)(y_pos + 1) * gamelayer->m_Width + (int)(x_pos);
+						//	const int GameIndex = pTiles[Index].m_Index;
+						//	//std::cout << m_aClients[c].m_aName << " " << m_aClients[c].m_Addr.ip[0] << " " << vel.x << std::endl;
+						//	//sprintf(buf, "x:%f y:%f %i\n", player_char->m_Pos.x, player_char->m_Pos.y, GameIndex);
+						//	//printf(buf);
+						//}
 					}
 				}
 
@@ -2886,6 +3403,14 @@ int CServer::Run()
 					}
 					if(!ClientHadInput)
 						GameServer()->OnClientPredictedEarlyInput(c, nullptr);
+				}
+
+				if((time_get() - ticks_timer) / time_freq() >= 1.0f)
+				{
+					ticks_per_second = m_CurrentGameTick - start_ticks;
+					std::cout << ticks_per_second << std::endl;
+					start_ticks = m_CurrentGameTick;
+					ticks_timer = time_get();
 				}
 
 				m_CurrentGameTick++;
@@ -3040,18 +3565,16 @@ int CServer::Run()
 					break;
 				}
 
+				if(m_CurrentGameTick == 1000)
+				{
+					m_aDemoRecorder[MAX_CLIENTS-1].Stop();
+					exit(0);
+				}
+
 				if(SpeedUpTicks)
 				{
 					break;
 				}
-			}
-
-			if((time_get()  - ticks_timer) / time_freq() >= 1.0f)
-			{
-				ticks_per_second = m_CurrentGameTick - start_ticks;
-				std::cout << ticks_per_second << std::endl;
-				start_ticks = m_CurrentGameTick;
-				ticks_timer = time_get();
 			}
 
 			// snap game
@@ -3073,7 +3596,7 @@ int CServer::Run()
 			if(m_ServerInfoNeedsUpdate)
 				UpdateServerInfo();
 
-			Antibot()->OnEngineTick();
+			//Antibot()->OnEngineTick();
 
 			if(!NonActive)
 				PumpNetwork(PacketWaiting);
