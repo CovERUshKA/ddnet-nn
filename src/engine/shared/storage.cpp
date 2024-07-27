@@ -6,6 +6,9 @@
 #include <engine/client/updater.h>
 #include <engine/storage.h>
 
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+
 #ifdef CONF_PLATFORM_HAIKU
 #include <stdlib.h>
 #endif
@@ -619,7 +622,7 @@ public:
 
 	bool RenameFile(const char *pOldFilename, const char *pNewFilename, int Type) override
 	{
-		dbg_assert(Type >= TYPE_SAVE && Type < m_NumPaths, "Type invalid");
+		//dbg_assert(Type >= TYPE_SAVE && Type < m_NumPaths, "Type invalid");
 
 		char aOldBuffer[IO_MAX_PATH_LENGTH];
 		char aNewBuffer[IO_MAX_PATH_LENGTH];

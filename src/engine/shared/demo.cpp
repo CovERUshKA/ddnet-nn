@@ -53,7 +53,7 @@ int CDemoRecorder::Start(class IStorage *pStorage, class IConsole *pConsole, con
 	m_pMapData = pMapData;
 	m_pConsole = pConsole;
 
-	IOHANDLE DemoFile = pStorage->OpenFile(pFilename, IOFLAG_WRITE, IStorage::TYPE_SAVE);
+	IOHANDLE DemoFile = pStorage->OpenFile(pFilename, IOFLAG_WRITE, IStorage::TYPE_ABSOLUTE);
 	if(!DemoFile)
 	{
 		if(m_pConsole)

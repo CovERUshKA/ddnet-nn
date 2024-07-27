@@ -150,6 +150,7 @@ public:
 	void Clear();
 
 	CEventHandler m_Events;
+	
 	CPlayer *m_apPlayers[MAX_CLIENTS];
 	// keep last input to always apply when none is sent
 	CNetObj_PlayerInput m_aLastPlayerInput[MAX_CLIENTS];

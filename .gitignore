@@ -1,2 +1,6 @@
 build
 .vscode
+
+ddnet-libs/*
+*/__pycache__
+*/*/__pycache__

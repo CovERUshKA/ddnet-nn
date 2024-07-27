@@ -908,8 +908,8 @@ bool CCharacter::IncreaseArmor(int Amount)
 
 void CCharacter::Die(int Killer, int Weapon)
 {
-	if(Server()->IsRecording(m_pPlayer->GetCID()))
-		Server()->StopRecord(m_pPlayer->GetCID());
+	//if(Server()->IsRecording(m_pPlayer->GetCID()))
+		//Server()->StopRecord(m_pPlayer->GetCID());
 
 	int ModeSpecial = GameServer()->m_pController->OnCharacterDeath(this, GameServer()->m_apPlayers[Killer], Weapon);
 
