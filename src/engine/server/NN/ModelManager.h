@@ -37,7 +37,7 @@ struct ModelInputInputs
 struct ModelInputBlocks
 {
 	// Blocks indexes
-	long long blocks[33 * 33 - 1];
+	long long blocks[33 * 33];
 };
 
 struct ModelOutput

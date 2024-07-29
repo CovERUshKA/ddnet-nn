@@ -2882,6 +2882,10 @@ int CServer::Run()
 
 	m_AuthManager.Init();
 
+	unsigned int Seed;
+	secure_random_fill(&Seed, sizeof(Seed));
+	srand(Seed);
+
 	if(Config()->m_Debug)
 	{
 		g_UuidManager.DebugDump();
@@ -3418,8 +3422,9 @@ int CServer::Run()
 				{
 					auto gamelayer = gamecontext->Layers()->GameLayer();
 					const CTile *pTiles = static_cast<CTile *>(Kernel()->RequestInterface<IMap>()->GetData(gamelayer->m_Data));
-
+					
 					int update_tick = 2000;
+					float finish_pos = 345.f * 32.f;
 
 					static std::vector<int> rewards;
 					static float best_average = -999999.f;
@@ -3429,23 +3434,24 @@ int CServer::Run()
 					{
 						auto bot = vBots[i];
 						// Move bot wherever you want
-						vec2 center_coords = vec2(12.f * 32.f, 12.f * 32.f);
+						//vec2 center_coords = vec2(12.f * 32.f, 12.f * 32.f);
 
 						auto bot_character = bot->GetCharacter();
 						// auto bot_2_character = gamecontext->GetPlayerChar(bot_2->GetCID());
 						bool died = false;
 						bool finished = false;
-						if(bot_character == nullptr || bot_character->Core()->m_Pos.x >= 62.f * 32.f)
+						if(bot_character == nullptr || bot_character->Core()->m_Pos.x >= finish_pos)
 						{
 							if(bot_character == nullptr)
 							{
 								died = true;
 							}
-							else if(bot_character->Core()->m_Pos.x >= 62.f * 32.f)
+							else if(bot_character->Core()->m_Pos.x >= finish_pos)
 							{
 								bot->KillCharacter();
 								finished = true;
 							}
+							//bot_character->Core()->m_IsInFreeze
 							bot->TryRespawn();
 							bot_character = bot->GetCharacter();
 							bot_character->SetSolo(true);
@@ -3466,29 +3472,29 @@ int CServer::Run()
 							float reward = 0.f;
 							if(died)
 							{
-								reward -= 5 * 32;
+								reward -= 348 * 32;
 							}
 							else if(finished)
 							{
-								reward += 5;
+								reward += 348 * 32;
 							}
-							else if(bot_character->IsGrounded())
-							{
-								reward = -20;
-							}
+							//else if(bot_character->IsGrounded())
+							//{
+							//	reward = -20;
+							//}
 							else
 							{
 								reward += bot_character->m_Pos.x - bot_character->m_PrevPos.x;
-								if(reward < 0)
-								{
-									reward *= 2;
-								}
+
+								// Encourage to run right faster
+								reward -= 1;
 
 								if(bot_character->m_Pos.x < 10.f * 32.f && reward <= 0)
 								{
-									reward = -5 * 32;
+									reward = -32 * 32;
 								}
 							}
+							
 							// int prev_dist = (int)abs(bot_character->m_PrevPos.x - bot_2_character->m_PrevPos.x);
 							// int now_dist = (int)abs(bot_character->m_Pos.x - bot_2_character->m_Pos.x);
 							// reward += prev_dist - now_dist;
@@ -3582,7 +3588,7 @@ int CServer::Run()
 						auto bot = vBots[i];
 						//printf("HAHHA3.2\n");
 						// Move bot wherever you want
-						vec2 center_coords = vec2(12.f * 32.f, 12.f * 32.f);
+						//vec2 center_coords = vec2(12.f * 32.f, 12.f * 32.f);
 
 						auto bot_character = bot->GetCharacter();
 						auto bot_character_core = bot_character->Core();
@@ -3613,7 +3619,7 @@ int CServer::Run()
 						/*std::cout << bot_pos.x
 								<< " " << bot_pos.y << std::endl;*/
 						// bot_character->Core()->m_HookDir
-						vec2 delta_coords = center_coords - bot_pos;
+						//vec2 delta_coords = center_coords - bot_pos;
 
 						/*vec2 rand_pos = {random_float() * 24.f * 32.f, random_float() * 24.f * 32.f};
 						delta_coords = center_coords - rand_pos;
@@ -3641,16 +3647,17 @@ int CServer::Run()
 						
 						if(input_inputs->is_hooking)
 						{
+							//printf("HJQWHEe1\n");
 							auto hook_relative = (bot_character_core->m_HookPos - bot_character_core->m_Pos) / gamecontext->Tuning()->m_HookLength;
-
+							//printf("HJQWHEe2\n");
 							input_inputs->hook_pos = vec2(std::clamp(hook_relative.x, -1.f, 1.f), std::clamp(hook_relative.y, -1.f, 1.f));
 							input_inputs->hook_dir = bot_character_core->m_HookDir;
-
+							//printf("HJQWHEe3\n");
 							auto ataned = atan2(hook_relative.y, hook_relative.x);
 							auto angle_x = cos(ataned);
 							auto angle_y = sin(ataned);
 							input_inputs->hook_angle = vec2(angle_x, angle_y);
-
+							//printf("HJQWHEe4\n");
 							if(vIsPreviouslyHooked[i])
 							{
 								auto hook_relative_old = vPrevHookPos[i] - bot_character->m_PrevPos;
@@ -3664,9 +3671,11 @@ int CServer::Run()
 							{
 								input_inputs->hook_old_angle = vec2(0.f, 0.f);
 							}
+							//printf("HJQWHEe5\n");
 
 							vIsPreviouslyHooked[i] = true;
 							vPrevHookPos[i] = bot_character_core->m_HookPos;
+							//printf("HJQWHEe6\n");
 						}
 						else
 						{
@@ -3677,15 +3686,19 @@ int CServer::Run()
 						int width = 33;
 						int height = 33;
 						int block_count = 0;
+						int map_width = gamelayer->m_Width;
+						int map_height = gamelayer->m_Height;
 
 						for(size_t y = 0; y < height; y++)
 							for(size_t x = 0; x < width; x++)
 							{
-								int Index = (int)(bot_pos.y / 32 - height / 2 + y) * gamelayer->m_Width + (int)(bot_pos.x / 32 - width / 2 + x);
-								if(y == height / 2 && width / 2 == x)
+								int index_x = std::clamp((int)(bot_pos.x / 32 - width / 2 + x), 0, map_width-1);
+								int index_y = std::clamp((int)(bot_pos.y / 32 - height / 2 + y), 0, map_height-1);
+								int Index = index_y * map_width + index_x;
+								/*if(y == height / 2 && width / 2 == x)
 								{
 									continue;
-								}
+								}*/
 								//input_blocks->blocks[block_count] = pTiles[Index].m_Index;
 								switch(pTiles[Index].m_Index)
 								{
@@ -3773,6 +3786,7 @@ int CServer::Run()
 				vOutputs = model_manager.Decide(vInputInputs, vInputBlocks);
 				//cout << "Time to decide: " << (float)(time_get_impl() - decide_time) / (float)time_freq() << endl;
 				decide_time = time_get_impl();
+				//printf("KEK\n");
 
 				for(int c = 0; c < MAX_CLIENTS; c++)
 				{

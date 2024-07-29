@@ -8,12 +8,12 @@
 // #include <iostream>
 #include "ModelManager.h"
 
-int64_t n_in = 4361; // 1088 + 11 278539
+int64_t n_in = 4372; // 1088 + 11 278539     4352 + 16
 int64_t n_out = 7;
 double stdrt = 2e-2;
-double learning_rate = 1e-3; // Default: 1e-3
+double learning_rate = 1e-4; // Default: 1e-3
 
-int64_t mini_batch_size = 8192;
+int64_t mini_batch_size = 8192; // 4096, 8192, 16384
 int64_t ppo_epochs = 3; // Default: 4
 double dbeta = 1e-3; // Default: 1e-3
 double clip_param = 0.2; // Default: 0.2
@@ -21,7 +21,6 @@ float gamma = 0.99f; // Default: 0.99f
 
 ActorCritic ac(n_in, n_out, stdrt);
 std::shared_ptr<torch::optim::Adam> opt; //(ac->parameters(), 1e-2);
-torch::jit::script::Module net_module;
 
 VT states;
 VT actions;
@@ -29,31 +28,10 @@ std::vector<float> rewards;
 std::vector<bool> dones;
 
 VT log_probs;
-VT returns;
+//VT returns;
 VT values;
 
 auto device = torch::kCUDA; // kCPU kCUDA
-
-// Function to normalize rewards using mean and standard deviation
-std::vector<torch::Tensor> normalize_rewards(const std::vector<torch::Tensor> &rewards)
-{
-	// Concatenate the vector of tensors into a single tensor
-	torch::Tensor rewards_tensor = torch::cat(rewards);
-
-	// Calculate mean and standard deviation
-	auto mean = rewards_tensor.mean();
-	auto std = rewards_tensor.std();
-
-	// Normalize rewards
-	std::vector<torch::Tensor> normalized_rewards;
-	for(const auto &reward : rewards)
-	{
-		normalized_rewards.push_back((reward - mean) / (std + 1e-8)); // Adding a small value to avoid division by zero
-	}
-
-	// Return the concatenated normalized rewards
-	return normalized_rewards;
-}
 
 // Function to generate random hyperparameters
 void generate_random_hyperparameters()
@@ -63,9 +41,9 @@ void generate_random_hyperparameters()
 	std::mt19937 gen(rd());
 
 	// Predefined set of learning rates
-	std::array<double, 5> lr_set = {1e-6, 1e-5, 5e-5, 1e-4, 5e-4};
+	std::array<double, 6> lr_set = {1e-6, 1e-5, 5e-5, 1e-4, 5e-4, 1e-3};
 	std::array<int64_t, 3> epochs_set = {2, 4, 8};
-	std::array<int64_t, 4> mini_batch_sizes_set = {4096, 8192, 16384, 32768};
+	std::array<int64_t, 3> mini_batch_sizes_set = {4096, 8192, 16384};
 
 	std::array<float, 3> gamma_set = {0.9f, 0.99f, 0.999f};
 	std::array<double, 3> beta_set = {0.001, 0.01, 0.1};
@@ -98,11 +76,13 @@ ModelManager::ModelManager(){
 	ac->normal(0., stdrt);
 	//ac->eval();
 	opt = std::make_shared<torch::optim::Adam>(ac->parameters(), learning_rate);
-	//torch::load(ac, "train\\1721844529599\\models\\last_model.pt");
-	//torch::load(opt, "train\\1721844529599\\models\\last_optimizer.pt");
+	//torch::load(ac, "train\\up_lr\\models\\last_model.pt");
+	//torch::load(*opt, "train\\up_lr\\models\\last_optimizer.pt");
 	cout << "Learning rate: " << learning_rate << " Gamma: " << gamma << " Beta: " << dbeta << " clip_param: " << clip_param << " Epochs: " << ppo_epochs << " Mini batch size: " << mini_batch_size << endl;
+	//Sleep(7000);
 	ac->to(device);
 	printf("2\n");
+	//Sleep(7000);
 	// opt(ac->parameters(), 1e-3);
 }
 
@@ -136,6 +116,7 @@ std::vector<ModelOutput> ModelManager::Decide(std::vector<ModelInputInputs> &inp
 	//int64_t decide_time = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
 	//cout << state_forward.sizes() << endl;
 	auto av = ac->forward(state_forward);
+	//printf("33.0\n");
 	torch::Tensor state = torch::cat({state_inputs, blocks_input}, 1);
 	//printf("33.1\n");
 	//actions.push_back(std::get<0>(av));
@@ -330,7 +311,7 @@ ModelOutput ModelManager::Decide(ModelInputInputs &input)
 	//cout << torch::argmax(std::get<0>(av)[0]).item<float>() << endl;
 	//cout << "End" << endl;
 	//printf("33.2\n");
-	values.push_back(std::get<1>(av));
+	//values.push_back(std::get<1>(av));
 	log_probs.push_back(ac->log_prob(std::get<0>(av)));
 	//printf("33.3\n");
 	
@@ -441,11 +422,11 @@ void ModelManager::SaveReplays()
 	if(rewards.size())
 	{
 		torch::NoGradGuard no_grad;
-		torch::Tensor tRewards = torch::from_blob(rewards.data(), {(long long)rewards.size()}, torch::kF32);
+		torch::Tensor tRewards = torch::from_blob(rewards.data(), {(long long)rewards.size(), 1}, torch::kF32);
 
 		tRewards = tRewards.to(device);
 
-		PPO::save_replay(states[0], actions[0], log_probs[0], tRewards, dones, tRewards - values[0]);
+		PPO::save_replay(states[0], actions[0], log_probs[0], tRewards, dones);
 	}
 
 	states.clear();
@@ -454,8 +435,8 @@ void ModelManager::SaveReplays()
 	dones.clear();
 	
 	log_probs.clear();
-	returns.clear();
-	values.clear();
+	//returns.clear();
+	//values.clear();
 
 	return;
 }
