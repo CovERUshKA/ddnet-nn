@@ -77,6 +77,7 @@ struct ActorCriticImpl : public torch::nn::Module
     // Forward pass.
     auto forward(torch::Tensor x) -> std::tuple<torch::Tensor, torch::Tensor> 
     {
+	    //torch::NoGradGuard no_grad;
         // Actor.
 	    //printf("1\n");
         //mu_ = torch::relu(a_lin1_->forward(x));

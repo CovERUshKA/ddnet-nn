@@ -57,7 +57,7 @@ struct ModelOutput
 
 struct ModelManager
 {
-	ModelManager();
+	ModelManager(size_t batch_size, size_t count_players);
 
 	ModelOutput Decide(ModelInputInputs &input);
 	std::vector<ModelOutput> Decide(std::vector<ModelInputInputs> &input, std::vector<ModelInputBlocks> blocks);
@@ -66,7 +66,7 @@ struct ModelManager
 	void Reward(float reward, bool done);
 	void SaveReplays();
 
-	void Update();
+	void Update(double &avg_training_loss);
 
 	void Save(std::string filename);
 

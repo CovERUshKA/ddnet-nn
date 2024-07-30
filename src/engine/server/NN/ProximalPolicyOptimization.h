@@ -24,9 +24,10 @@ class PPO
 {
 public:
     static auto returns(VT& rewards, VT& dones, VT& vals, double gamma, double lambda) -> VT; // Generalized advantage estimate, https://arxiv.org/abs/1506.02438
+	static auto Initilize(size_t batch_size, size_t count_players) -> void;
     static auto update(ActorCritic& ac,
 	    std::shared_ptr<torch::optim::Adam> &opt, 
-                       uint steps, uint epochs, uint mini_batch_size, double beta, float gamma, c10::DeviceType device, double clip_param = .2) -> void;
+                       uint steps, uint epochs, uint mini_batch_size, double beta, float gamma, c10::DeviceType device, double clip_param = .2) -> double;
     static auto save_replay(torch::Tensor &states,
 	    torch::Tensor &actions,
 	    torch::Tensor &log_probs,
@@ -39,10 +40,10 @@ public:
 class ReplayBuffer
 {
 public:
-	ReplayBuffer(size_t capacity) :
-		capacity(capacity)
+	ReplayBuffer(size_t capacity, size_t count_players) :
+		capacity(capacity), count_players(count_players)
 	{
-		dones.resize(capacity/64);
+		dones.resize(capacity / count_players);
 	}
 
 	void add(const torch::Tensor &state, const torch::Tensor &action, const torch::Tensor &log_prob, const torch::Tensor &reward, const std::vector<bool> &dones)
@@ -91,7 +92,7 @@ public:
 		//	advantages = torch::cat({advantages, advantage}, 1);
 		//}
 
-		for(size_t i = 0; i < 64; i++)
+		for(size_t i = 0; i < count_players; i++)
 		{
 			this->dones[i].push_back(dones[i]);
 		}
@@ -118,7 +119,7 @@ public:
 		dones_concat.clear();
 	    //advantages.clear();
 
-		for(size_t i = 0; i < 64; i++)
+		for(size_t i = 0; i < count_players; i++)
 	    {
 		    this->dones[i].clear();
 	    }
@@ -135,25 +136,26 @@ public:
 		//printf("1\n");
 		//printf("1\n");
 		//printf("1\n");
+
 		if(dones_concat.size() == 0)
 		{
-			//printf("creating\n");
-			//Sleep(3000);
+			// printf("creating\n");
+			// Sleep(3000);
 			states_concatenated = torch::cat(states, 1);
-			//printf("states catted\n");
-			//Sleep(7000);
-			//states_concatenated = torch::Tensor();
-			//printf("states deleted\n");
-			//Sleep(7000);
-			// printf("1\n");
+			// printf("states catted\n");
+			// Sleep(7000);
+			// states_concatenated = torch::Tensor();
+			// printf("states deleted\n");
+			// Sleep(7000);
+			//  printf("1\n");
 			actions_concat = torch::cat(actions, 1);
 			// printf("1\n");
 			log_probs_concat = torch::cat(log_probs, 1);
 			// printf("1\n");
 			rewards_concat = torch::cat(rewards, 1);
-			//printf("created\n");
-			// advantages_concat = torch::cat(rewards, 1);
-			// printf("1\n");
+			// printf("created\n");
+			//  advantages_concat = torch::cat(rewards, 1);
+			//  printf("1\n");
 
 			states_concatenated = states_concatenated.reshape({states_concatenated.sizes()[0] * states_concatenated.sizes()[1], states_concatenated.sizes()[2]});
 			actions_concat = actions_concat.reshape({actions_concat.sizes()[0] * actions_concat.sizes()[1], actions_concat.sizes()[2]});
@@ -165,22 +167,24 @@ public:
 			// printf("1\n");
 			// advantages_concat = advantages_concat.reshape({advantages_concat.numel()});
 			// printf("1\n");
-			for(size_t i = 0; i < 64; i++)
+			for(size_t i = 0; i < count_players; i++)
 			{
 				dones_concat.insert(dones_concat.end(), dones[i].begin(), dones[i].end());
 			}
 		}
+
 		//printf("1\n");
 		std::vector<bool> dones_concat_ret;
 		torch::Tensor states_concatenated_ret, actions_concat_ret, log_probs_concat_ret, rewards_concat_ret;
-		size_t start = std::rand() % (dones_concat.size() - batch_size);
+
+		size_t start = round(((float)std::rand() / (float)RAND_MAX) * (float)(dones_concat.size() - batch_size - 1));
 		size_t end = start + batch_size;
 
-		for(size_t i = end-1; i > start; i--)
+		for(size_t i = end - 1; i > start; i--)
 		{
 			if(dones_concat[i])
 			{
-				end = i+1;
+				end = i + 1;
 				break;
 			}
 		}
@@ -204,6 +208,7 @@ public:
 	}
 
 private:
+	size_t count_players;
 	size_t capacity;
 	torch::Tensor states_concatenated, actions_concat, log_probs_concat, rewards_concat;
 	std::vector<bool> dones_concat;
@@ -221,7 +226,12 @@ torch::Tensor normalize_rewards(const torch::Tensor &rewards)
 	return (rewards - mean) / (std + 1e-8);
 }
 
-static ReplayBuffer replay_buffer(128000);
+static ReplayBuffer* replay_buffer = nullptr;
+
+auto PPO::Initilize(size_t batch_size, size_t count_players) -> void
+{
+	replay_buffer = new ReplayBuffer(batch_size, count_players); // (256000, 256)
+}
 
 auto PPO::returns(VT& rewards, VT& dones, VT& vals, double gamma, double lambda) -> VT
 {
@@ -280,117 +290,153 @@ auto PPO::save_replay(torch::Tensor& state,
     torch::Tensor& returns,
 	std::vector<bool>& dones) -> void
 {
-	replay_buffer.add(state, action, log_prob, returns, dones);
+	//torch::NoGradGuard no_grad;
+	replay_buffer->add(state, action, log_prob, returns, dones);
 }
 
 auto PPO::count_of_replays() -> size_t
 {
-	return replay_buffer.size();
+	return replay_buffer->size();
 }
 
-auto PPO::update(ActorCritic& ac,
-				std::shared_ptr<torch::optim::Adam>& opt, 
-                 uint steps, uint epochs, uint mini_batch_size, double beta, float gamma, c10::DeviceType device, double clip_param) -> void
+auto PPO::update(ActorCritic &ac,
+	std::shared_ptr<torch::optim::Adam> &opt,
+	uint steps, uint epochs, uint mini_batch_size, double beta, float gamma, c10::DeviceType device, double clip_param) -> double
 {
 	double total_loss = 0.0;
 
-    for (uint e=0;e<epochs;e++)
-    {
-        // Generate random indices.
-        /*torch::Tensor cpy_sta = torch::zeros({mini_batch_size, states.size(1)}, states.options());
-        torch::Tensor cpy_act = torch::zeros({mini_batch_size, actions.size(1)}, actions.options());
-        torch::Tensor cpy_log = torch::zeros({mini_batch_size, log_probs.size(1)}, log_probs.options());
-        torch::Tensor cpy_ret = torch::zeros({mini_batch_size, returns.size(1)}, returns.options());
-        torch::Tensor cpy_adv = torch::zeros({mini_batch_size, advantages.size(1)}, advantages.options());*/
-		//printf("UPDATING0\n");
-		auto [states, actions, log_probs, rewards, dones] = replay_buffer.sample(mini_batch_size);
-		//std::vector<torch::Tensor> states, actions, log_probs, rewards;
-		//std::vector<bool> dones;
-	 //   for(const auto &[state, action, log_prob, reward, done, advantage] : batch)
-	 //   {
-		//    states.push_back(state);
-		//    actions.push_back(action);
-		//    log_probs.push_back(log_prob);
-		//	rewards.push_back(reward);
-		//    dones.insert(dones.end(), done.begin(), done.end());
-		//    //advantages.push_back(advantage);
-		//    //std::cout << log_prob.sizes() << std::endl;
-	 //   }
-	    //printf("UPDATING0.1\n");
-	    torch::Tensor cpy_sta = states;
-	    //std::cout << cpy_sta.sizes() << std::endl;
-	    //printf("UPDATING0.2\n");
-	    torch::Tensor cpy_inputs = cpy_sta.index({"...", torch::indexing::Slice(0, 16)});
-	    //printf("UPDATING0.3\n");
-	    torch::Tensor cpy_blocks = torch::one_hot(cpy_sta.index({"...", torch::indexing::Slice(16, 1105)}).to(torch::kInt64), 4).to(torch::kF32).view({cpy_sta.size(0), -1});
-	    //printf("UPDATING0.4\n");
-	    cpy_sta = torch::cat({cpy_inputs, cpy_blocks}, 1);
-	    //std::cout << cpy_sta.sizes() << std::endl;
-	    //printf("UPDATING0.1.1\n");
-	    torch::Tensor cpy_act = actions;
-	    //printf("UPDATING0.1.2\n");
-	    torch::Tensor cpy_log = log_probs;
-	    //printf("UPDATING0.1.3\n");
-	    //auto catted = torch::cat(rewards).reshape({mini_batch_size, 1});
-	    //printf("UPDATING0.1.3.1\n");
-	    //std::cout << catted.sizes() << std::endl;
-	    //printf("UPDATING0.1.3.2\n");
-	    auto returnsee = calculate_returns(rewards, dones, gamma);
-	    torch::Tensor cpy_ret = normalize_rewards(returnsee);
-		//printf("UPDATING0.1.4\n");
-	    torch::Tensor cpy_adv = compute_advantages(ac, cpy_ret, cpy_sta.view({cpy_sta.size(0), 1, 4372}));
-	    //std::cout << cpy_ret << std::endl;
+	{
+		std::deque<torch::Tensor> states, actions, log_probs, rewards;
+		std::deque<std::vector<bool>> dones;
 
-        /*for (uint b=0;b<mini_batch_size;b++) {
+		for(size_t i = 0; i < epochs; i++)
+		{
+			auto [state, action, log_prob, reward, done] = replay_buffer->sample(mini_batch_size);
+			states.push_back(state);
+			actions.push_back(action);
+			log_probs.push_back(log_prob);
+			rewards.push_back(reward);
+			dones.push_back(done);
+		}
+		// printf("CHECK\n");
+		// Sleep(10000);
+		// printf("CLEARING\n");
+		replay_buffer->clear();
+		// torch::cuda::synchronize();
+		// c10::cuda::CUDACachingAllocator::emptyCache();
+		// Sleep(10000);
 
-            uint idx = std::uniform_int_distribution<uint>(0, steps-1)(re);
-            cpy_sta[b] = states[idx];
-            cpy_act[b] = actions[idx];
-            cpy_log[b] = log_probs[idx];
-            cpy_ret[b] = returns[idx];
-            cpy_adv[b] = advantages[idx];
-        }*/
-	    //printf("UPDATING1.1\n");
-        auto av = ac->forward(cpy_sta); // action value pairs
-	    //printf("UPDATING1.2\n");
-        auto action = std::get<0>(av);
-        auto entropy = ac->entropy().mean();
-        auto new_log_prob = ac->log_prob(cpy_act);
-	    //printf("UPDATING1.3\n");
-        auto old_log_prob = cpy_log;
-	    //printf("UPDATING1.3.1\n");
-		//std::cout << new_log_prob.sizes() << " " << old_log_prob.sizes() << std::endl;
-        auto ratio = (new_log_prob - old_log_prob).exp();
-	    //printf("UPDATING1.4\n");
-		//std::cout << ratio.sizes() << std::endl;
-	    //std::cout << cpy_adv.sizes() << std::endl;
-        auto surr1 = ratio * cpy_adv;
-	    //printf("UPDATING1.4.1\n");
-        auto surr2 = torch::clamp(ratio, 1. - clip_param, 1. + clip_param) * cpy_adv;
-	    //printf("UPDATING1.5\n");
-        auto val = std::get<1>(av);
-	    //printf("UPDATING1.6\n");
-        auto actor_loss = -torch::min(surr1, surr2).mean();
-	    //printf("UPDATING1.7\n");
-	    auto critic_loss = torch::nn::functional::mse_loss(val, cpy_ret); //(cpy_ret - val).pow(2).mean();
-	    //printf("UPDATING1.8\n");
-        auto loss = 0.5 * critic_loss + actor_loss - beta * entropy;
-	    //printf("UPDATING1.9\n");
-        //std::cout << "Actor Loss: " << actor_loss.item<double>() << ", Critic Loss: " << critic_loss.item<double>() << std::endl;
+		for(uint e = 0; e < epochs; e++)
+		{
+			c10::cuda::CUDACachingAllocator::emptyCache();
+			torch::Tensor states_cpy = states[0];
+			torch::Tensor actions_cpy = actions[0];
+			torch::Tensor log_probs_cpy = log_probs[0];
+			torch::Tensor rewards_cpy = rewards[0];
+			std::vector<bool> dones_cpy = dones[0];
+			// Generate random indices.
+			/*torch::Tensor cpy_sta = torch::zeros({mini_batch_size, states.size(1)}, states.options());
+			torch::Tensor cpy_act = torch::zeros({mini_batch_size, actions.size(1)}, actions.options());
+			torch::Tensor cpy_log = torch::zeros({mini_batch_size, log_probs.size(1)}, log_probs.options());
+			torch::Tensor cpy_ret = torch::zeros({mini_batch_size, returns.size(1)}, returns.options());
+			torch::Tensor cpy_adv = torch::zeros({mini_batch_size, advantages.size(1)}, advantages.options());*/
+			// printf("UPDATING0\n");
+			// auto [states, actions, log_probs, rewards, dones] = replay_buffer->sample(mini_batch_size);
+			// std::vector<torch::Tensor> states, actions, log_probs, rewards;
+			// std::vector<bool> dones;
+			//   for(const auto &[state, action, log_prob, reward, done, advantage] : batch)
+			//   {
+			//    states.push_back(state);
+			//    actions.push_back(action);
+			//    log_probs.push_back(log_prob);
+			//	rewards.push_back(reward);
+			//    dones.insert(dones.end(), done.begin(), done.end());
+			//    //advantages.push_back(advantage);
+			//    //std::cout << log_prob.sizes() << std::endl;
+			//   }
+			// printf("UPDATING0.1\n");
+			torch::Tensor cpy_sta = states_cpy;
+			// std::cout << cpy_sta.sizes() << std::endl;
+			// printf("UPDATING0.2\n");
+			torch::Tensor cpy_inputs = cpy_sta.index({"...", torch::indexing::Slice(0, 16)});
+			// printf("UPDATING0.3\n");
+			torch::Tensor cpy_blocks = torch::one_hot(cpy_sta.index({"...", torch::indexing::Slice(16, 1105)}).to(torch::kInt64), 4).to(torch::kF32).view({cpy_sta.size(0), -1});
+			// printf("UPDATING0.4\n");
+			cpy_sta = torch::cat({cpy_inputs, cpy_blocks}, 1);
+			// std::cout << cpy_sta.sizes() << std::endl;
+			// printf("UPDATING0.1.1\n");
+			torch::Tensor cpy_act = actions_cpy;
+			// printf("UPDATING0.1.2\n");
+			torch::Tensor cpy_log = log_probs_cpy;
+			// printf("UPDATING0.1.3\n");
+			// auto catted = torch::cat(rewards).reshape({mini_batch_size, 1});
+			// printf("UPDATING0.1.3.1\n");
+			// std::cout << catted.sizes() << std::endl;
+			// printf("UPDATING0.1.3.2\n");
+			auto returnsee = calculate_returns(rewards_cpy, dones_cpy, gamma);
+			torch::Tensor cpy_ret = normalize_rewards(returnsee);
+			// printf("UPDATING0.1.4\n");
+			torch::Tensor cpy_adv = compute_advantages(ac, cpy_ret, cpy_sta.view({cpy_sta.size(0), 1, 4372}));
+			// std::cout << cpy_ret << std::endl;
 
-        opt->zero_grad();
-	    //printf("UPDATING1.10\n");
-        loss.backward();
-	    //printf("UPDATING1.11\n");
-        opt->step();
-	    //printf("UPDATING1.12\n");
-		total_loss += loss.item<double>();
-    }
+			/*for (uint b=0;b<mini_batch_size;b++) {
+
+			    uint idx = std::uniform_int_distribution<uint>(0, steps-1)(re);
+			    cpy_sta[b] = states[idx];
+			    cpy_act[b] = actions[idx];
+			    cpy_log[b] = log_probs[idx];
+			    cpy_ret[b] = returns[idx];
+			    cpy_adv[b] = advantages[idx];
+			}*/
+			// printf("UPDATING1.1\n");
+			auto av = ac->forward(cpy_sta); // action value pairs
+							// printf("UPDATING1.2\n");
+			auto action = std::get<0>(av);
+			auto entropy = ac->entropy().mean();
+			auto new_log_prob = ac->log_prob(cpy_act);
+			// printf("UPDATING1.3\n");
+			auto old_log_prob = cpy_log;
+			// printf("UPDATING1.3.1\n");
+			// std::cout << new_log_prob.sizes() << " " << old_log_prob.sizes() << std::endl;
+			auto ratio = (new_log_prob - old_log_prob).exp();
+			// printf("UPDATING1.4\n");
+			// std::cout << ratio.sizes() << std::endl;
+			// std::cout << cpy_adv.sizes() << std::endl;
+			auto surr1 = ratio * cpy_adv;
+			// printf("UPDATING1.4.1\n");
+			auto surr2 = torch::clamp(ratio, 1. - clip_param, 1. + clip_param) * cpy_adv;
+			// printf("UPDATING1.5\n");
+			auto val = std::get<1>(av);
+			// printf("UPDATING1.6\n");
+			auto actor_loss = -torch::min(surr1, surr2).mean();
+			// printf("UPDATING1.7\n");
+			auto critic_loss = torch::nn::functional::mse_loss(val, cpy_ret); //(cpy_ret - val).pow(2).mean();
+			// printf("UPDATING1.8\n");
+			auto loss = 0.5 * critic_loss + actor_loss - beta * entropy;
+			// printf("UPDATING1.9\n");
+			// std::cout << "Actor Loss: " << actor_loss.item<double>() << ", Critic Loss: " << critic_loss.item<double>() << std::endl;
+
+			opt->zero_grad();
+			// printf("UPDATING1.10\n");
+			loss.backward();
+			// printf("UPDATING1.11\n");
+			opt->step();
+			// printf("UPDATING1.12\n");
+			total_loss += loss.item<double>();
+			// printf("Chillin\n");
+			// Sleep(10000);
+			states.erase(states.begin());
+			actions.erase(actions.begin());
+			log_probs.erase(log_probs.begin());
+			rewards.erase(rewards.begin());
+			dones.erase(dones.begin());
+		}
+	}
 
 	double avg_loss = total_loss / epochs;
-    std::cout << "Average training Loss: " << avg_loss << std::endl;
-
-    replay_buffer.clear();
+	//std::cout << "Average training Loss: " << avg_loss << std::endl;
 
 	c10::cuda::CUDACachingAllocator::emptyCache();
+
+	return avg_loss;
 }

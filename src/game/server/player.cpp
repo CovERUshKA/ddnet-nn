@@ -661,11 +661,11 @@ bool CPlayer::SetTimerType(int TimerType)
 	return true;
 }
 
-void CPlayer::TryRespawn()
+void CPlayer::TryRespawn(vec2 _SpawnPos)
 {
-	vec2 SpawnPos;
+	vec2 SpawnPos = _SpawnPos;
 
-	if(!GameServer()->m_pController->CanSpawn(m_Team, &SpawnPos, GameServer()->GetDDRaceTeam(m_ClientID)))
+	if(SpawnPos == vec2(0, 0) && !GameServer()->m_pController->CanSpawn(m_Team, &SpawnPos, GameServer()->GetDDRaceTeam(m_ClientID)))
 		return;
 
 	m_WeakHookSpawn = false;
