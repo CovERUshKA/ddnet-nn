@@ -14,6 +14,10 @@ struct ModelInputInputs
 	vec2 m_vel;
 	// Is bot on ground
 	float is_grounded;
+	// Can bot jump
+	float can_jump;
+	// Is bot using jump
+	float is_jumping;
 	
 	// 
 	// HOOK
@@ -32,6 +36,9 @@ struct ModelInputInputs
 	vec2 hook_angle;
 	// Old hook angle according to tee
 	vec2 hook_old_angle;
+
+	// Path of the tee
+	vec2 path[30]; 
 };
 
 struct ModelInputBlocks
@@ -59,8 +66,8 @@ struct ModelManager
 {
 	ModelManager(size_t batch_size, size_t count_players);
 
-	ModelOutput Decide(ModelInputInputs &input);
-	std::vector<ModelOutput> Decide(std::vector<ModelInputInputs> &input, std::vector<ModelInputBlocks> blocks);
+	//ModelOutput Decide(ModelInputInputs &input);
+	std::vector<ModelOutput> Decide(std::vector<ModelInputInputs> &input, std::vector<ModelInputBlocks>& blocks);
 	//std::vector<ModelOutput> Decide(std::vector<ModelInput> &input);
 
 	void Reward(float reward, bool done);

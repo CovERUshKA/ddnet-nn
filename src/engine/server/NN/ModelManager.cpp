@@ -8,13 +8,13 @@
 // #include <iostream>
 #include "ModelManager.h"
 
-int64_t n_in = 4372; // 1088 + 11 278539     4352 + 16
-int64_t n_out = 7;
+int64_t n_in = 4434; // 1088 + 11 278539     4352 + 16
+int64_t n_out = 9;
 double stdrt = 2e-2;
-double learning_rate = 1e-4; // Default: 1e-3
+double learning_rate = 1e-5; // Default: 1e-3
 
-int64_t mini_batch_size = 8192; // 4096, 8192, 16384, 32768
-int64_t ppo_epochs = 3; // Default: 4
+int64_t mini_batch_size = 16384; // 4096, 8192, 16384, 32768
+int64_t ppo_epochs = 8; // Default: 4
 double dbeta = 1e-3; // Default: 1e-3
 double clip_param = 0.2; // Default: 0.2
 float gamma = 0.99f; // Default: 0.99f
@@ -29,7 +29,7 @@ std::vector<bool> dones;
 
 VT log_probs;
 //VT returns;
-VT values;
+//VT values;
 
 auto device = torch::kCUDA; // kCPU kCUDA
 
@@ -73,11 +73,11 @@ ModelManager::ModelManager(size_t batch_size, size_t count_players){
 	//torch::set_num_interop_threads(4);
 	//generate_random_hyperparameters();
 	ac->to(torch::kF32);
-	ac->normal(0., stdrt);
+	//ac->normal(0., stdrt);
 	//ac->eval();
 	opt = std::make_shared<torch::optim::Adam>(ac->parameters(), learning_rate);
-	torch::load(ac, "train\\1722357361235\\models\\last_model.pt");
-	torch::load(*opt, "train\\1722357361235\\models\\last_optimizer.pt");
+	//torch::load(ac, "train\\1722357361235\\models\\last_model.pt");
+	//torch::load(*opt, "train\\1722357361235\\models\\last_optimizer.pt");
 	cout << "Learning rate: " << learning_rate << " Gamma: " << gamma << " Beta: " << dbeta << " clip_param: " << clip_param << " Epochs: " << ppo_epochs << " Mini batch size: " << mini_batch_size << endl;
 	//Sleep(7000);
 	ac->to(device);
@@ -87,7 +87,7 @@ ModelManager::ModelManager(size_t batch_size, size_t count_players){
 	PPO::Initilize(batch_size, count_players);
 }
 
-std::vector<ModelOutput> ModelManager::Decide(std::vector<ModelInputInputs> &input_inputs, std::vector<ModelInputBlocks> input_blocks)
+std::vector<ModelOutput> ModelManager::Decide(std::vector<ModelInputInputs> &input_inputs, std::vector<ModelInputBlocks>& input_blocks)
 {
 	torch::NoGradGuard no_grad;
 	//printf("HERE\n");
@@ -95,7 +95,7 @@ std::vector<ModelOutput> ModelManager::Decide(std::vector<ModelInputInputs> &inp
 	// ac->to(torch::kF32);
 	// ac->normal(0., stdrt);
 	//printf("Count: %i\n", (int)input.size());
-	auto decide_time = std::chrono::steady_clock::now();
+	//auto decide_time = std::chrono::steady_clock::now();
 	torch::Tensor state_inputs = torch::from_blob(input_inputs.data(), {(long long)input_inputs.size(), sizeof(ModelInputInputs) / 4}, torch::kF32);
 	torch::Tensor blocks_input = torch::from_blob(input_blocks.data(), {(long long)input_blocks.size(), sizeof(ModelInputBlocks) / sizeof(long long)}, torch::kInt64);
 	//printf("1\n");
@@ -116,7 +116,8 @@ std::vector<ModelOutput> ModelManager::Decide(std::vector<ModelInputInputs> &inp
 	//  Play.
 	//int64_t decide_time = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
 	//cout << state_forward.sizes() << endl;
-	auto av = ac->forward(state_forward);
+	auto av = ac->actor_forward(state_forward);
+	av = ac->normal_actor(av);
 	//printf("33.0\n");
 	torch::Tensor state = torch::cat({state_inputs, blocks_input}, 1);
 	//printf("33.1\n");
@@ -150,8 +151,7 @@ std::vector<ModelOutput> ModelManager::Decide(std::vector<ModelInputInputs> &inp
 		std::cout << std::endl;
 	}*/
 
-	auto tActions = std::get<0>(av);
-	auto tValues = std::get<1>(av);
+	auto tActions = av;
 	torch::Tensor tLogProbs;
 	if(ac->is_training())
 	{
@@ -178,6 +178,8 @@ std::vector<ModelOutput> ModelManager::Decide(std::vector<ModelInputInputs> &inp
 	auto hooks = tActions_cpu.index({torch::indexing::Slice(), torch::indexing::Slice(5, 7)});
 	auto hook_indices = torch::argmax(hooks, 1);
 	//printf("4\n");
+	auto jumps = tActions_cpu.index({torch::indexing::Slice(), torch::indexing::Slice(7, 9)});
+	auto jump_indices = torch::argmax(hooks, 1);
 	
 	//printf("5\n");
 	auto angle_x_vec = angle_x.accessor<float, 1>();
@@ -188,6 +190,7 @@ std::vector<ModelOutput> ModelManager::Decide(std::vector<ModelInputInputs> &inp
 	//printf("8\n");
 	auto hook_indices_vec = hook_indices.accessor<int64_t, 1>();
 	//printf("9\n");
+	auto jump_indices_vec = jump_indices.accessor<int64_t, 1>();
 
 	//decide_time = std::chrono::steady_clock::now();
 	//float time_sum = 0;
@@ -196,7 +199,7 @@ std::vector<ModelOutput> ModelManager::Decide(std::vector<ModelInputInputs> &inp
 	{
 		states.push_back(state);
 		actions.push_back(tActions);
-		values.push_back(tValues);
+		//values.push_back(tValues);
 		log_probs.push_back(tLogProbs);
 	}
 	//auto now = std::chrono::steady_clock::now();
@@ -215,6 +218,7 @@ std::vector<ModelOutput> ModelManager::Decide(std::vector<ModelInputInputs> &inp
 		output.direction = direction_indices_vec[i];
 		//printf("8\n");
 		output.hook = static_cast<bool>(hook_indices_vec[i]);
+		output.jump = static_cast<bool>(jump_indices_vec[i]);
 		//printf("9\n");
 		outputs.push_back(output);
 
@@ -289,78 +293,78 @@ std::vector<ModelOutput> ModelManager::Decide(std::vector<ModelInputInputs> &inp
 	return outputs;
 }
 
-ModelOutput ModelManager::Decide(ModelInputInputs &input)
-{
-	torch::NoGradGuard no_grad;
-
-	ModelOutput output;
-	//ac->to(torch::kF32);
-	//ac->normal(0., stdrt);
-	//printf("22\n");
-	torch::Tensor state = torch::zeros({1, n_in}, torch::kF32);
-	//printf("1\n");
-	std::memcpy(state.data_ptr(), &(input), sizeof(input));
-	state = state.to(device);
-	//printf("2\n");
-	states.push_back(state);
-	//printf("33\n");
-	// Play.
-	auto av = ac->forward(state);
-	//printf("33.1\n");
-	actions.push_back(std::get<0>(av));
-	//cout << "Printing" << endl;
-	//cout << torch::argmax(std::get<0>(av)[0]).item<float>() << endl;
-	//cout << "End" << endl;
-	//printf("33.2\n");
-	//values.push_back(std::get<1>(av));
-	log_probs.push_back(ac->log_prob(std::get<0>(av)));
-	//printf("33.3\n");
-	
-	//float angle = std::get<0>(av)[0][0].item<float>();
-	//output.angle = (fmodf(angle, 1.f) + 1.f) / 2.f;
-
-	//float angle = torch::argmax(std::get<0>(av)[0]).item<float>() / 1608.f;
-	//output.angle = angle;
-
-	/*int direction = torch::argmax(std::get<0>(av)[0]).item<int>() - 1;
-	output.direction = direction;*/
-
-	//Big network
-	auto angles = std::get<0>(av)[0].index({torch::indexing::Slice(0, 2)});
-	//cout << "Angles size: " << angles.size(0) << endl;
-	float x = angles[0].item<float>();
-	float y = angles[1].item<float>();
-
-	// Calculate the angle in radians
-	float angle_radians = std::atan2(y, x);
-
-	// Compute the unit vector components
-	float angle_x = std::cos(angle_radians);
-	float angle_y = std::sin(angle_radians);
-	output.angle = {angle_x, angle_y};
-
-	auto directions = std::get<0>(av)[0].index({torch::indexing::Slice(2, 5)});
-	int direction = torch::argmax(directions).item<int>() - 1;
-	output.direction = direction;
-
-	auto hooks = std::get<0>(av)[0].index({torch::indexing::Slice(5, 7)});
-	bool hook = torch::argmax(hooks).item<bool>();
-	output.hook = hook;
-
-	//printf("33.4\n");
-	//printf("Angle: %f\n", output.angle);
-
-	/*int64_t n_in = 4;
-	int64_t n_out = 2;
-	double std = 2e-2;*/
-
-	/*ActorCritic ac(n_in, n_out, std);
-	ac->to(torch::kF64);
-	ac->normal(0., std);
-	torch::optim::Adam opt(ac->parameters(), 1e-3);*/
-
-	return output;
-}
+//ModelOutput ModelManager::Decide(ModelInputInputs &input)
+//{
+//	torch::NoGradGuard no_grad;
+//
+//	ModelOutput output;
+//	//ac->to(torch::kF32);
+//	//ac->normal(0., stdrt);
+//	//printf("22\n");
+//	torch::Tensor state = torch::zeros({1, n_in}, torch::kF32);
+//	//printf("1\n");
+//	std::memcpy(state.data_ptr(), &(input), sizeof(input));
+//	state = state.to(device);
+//	//printf("2\n");
+//	states.push_back(state);
+//	//printf("33\n");
+//	// Play.
+//	auto av = ac->forward(state);
+//	//printf("33.1\n");
+//	actions.push_back(std::get<0>(av));
+//	//cout << "Printing" << endl;
+//	//cout << torch::argmax(std::get<0>(av)[0]).item<float>() << endl;
+//	//cout << "End" << endl;
+//	//printf("33.2\n");
+//	//values.push_back(std::get<1>(av));
+//	log_probs.push_back(ac->log_prob(std::get<0>(av)));
+//	//printf("33.3\n");
+//	
+//	//float angle = std::get<0>(av)[0][0].item<float>();
+//	//output.angle = (fmodf(angle, 1.f) + 1.f) / 2.f;
+//
+//	//float angle = torch::argmax(std::get<0>(av)[0]).item<float>() / 1608.f;
+//	//output.angle = angle;
+//
+//	/*int direction = torch::argmax(std::get<0>(av)[0]).item<int>() - 1;
+//	output.direction = direction;*/
+//
+//	//Big network
+//	auto angles = std::get<0>(av)[0].index({torch::indexing::Slice(0, 2)});
+//	//cout << "Angles size: " << angles.size(0) << endl;
+//	float x = angles[0].item<float>();
+//	float y = angles[1].item<float>();
+//
+//	// Calculate the angle in radians
+//	float angle_radians = std::atan2(y, x);
+//
+//	// Compute the unit vector components
+//	float angle_x = std::cos(angle_radians);
+//	float angle_y = std::sin(angle_radians);
+//	output.angle = {angle_x, angle_y};
+//
+//	auto directions = std::get<0>(av)[0].index({torch::indexing::Slice(2, 5)});
+//	int direction = torch::argmax(directions).item<int>() - 1;
+//	output.direction = direction;
+//
+//	auto hooks = std::get<0>(av)[0].index({torch::indexing::Slice(5, 7)});
+//	bool hook = torch::argmax(hooks).item<bool>();
+//	output.hook = hook;
+//
+//	//printf("33.4\n");
+//	//printf("Angle: %f\n", output.angle);
+//
+//	/*int64_t n_in = 4;
+//	int64_t n_out = 2;
+//	double std = 2e-2;*/
+//
+//	/*ActorCritic ac(n_in, n_out, std);
+//	ac->to(torch::kF64);
+//	ac->normal(0., std);
+//	torch::optim::Adam opt(ac->parameters(), 1e-3);*/
+//
+//	return output;
+//}
 
 void ModelManager::Reward(float reward, bool done)
 {

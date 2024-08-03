@@ -52,7 +52,9 @@
 // Neural network
 #include <game/server/player.h>
 #include <engine/server/NN/ModelManager.h>
+#include <engine/server/NN/AStar.h>
 #include <numeric>
+#include <random>
 //#include <EvolutionNet/EvolutionNet.hpp>
 
 extern bool IsInterrupted();
@@ -2988,18 +2990,46 @@ int CServer::Run()
 		dbg_msg("server", "+-------------------------+");
 	}
 
+	std::random_device rd;
+	std::mt19937 gen(rd());
+	std::discrete_distribution<> spawn_probabilities_distribution;
+
 	std::vector<vec2> vSpawnPoints;
+	vec2 finishPos = vec2(-1, -1);
+	std::vector<std::vector<int>> pathfinding_grid;
+	std::vector<std::vector<char>> vNeuralTiles;
 
 	auto gamecontext = ((CGameContext *)GameServer());
 	const CMapItemLayerTilemap *pTileMap = gamecontext->Layers()->GameLayer();
 	const CTile *pTiles = static_cast<CTile *>(Kernel()->RequestInterface<IMap>()->GetData(pTileMap->m_Data));
 
+	pathfinding_grid.resize(pTileMap->m_Height);
+	vNeuralTiles.resize(pTileMap->m_Height);
+
 	for(int y = 0; y < pTileMap->m_Height; y++)
 	{
+		pathfinding_grid[y].resize(pTileMap->m_Width);
+		vNeuralTiles[y].resize(pTileMap->m_Width);
 		for(int x = 0; x < pTileMap->m_Width; x++)
 		{
 			const int Index = y * pTileMap->m_Width + x;
 			const int GameIndex = pTiles[Index].m_Index - ENTITY_OFFSET;
+
+			switch(pTiles[Index].m_Index)
+			{
+				case 1:
+				case 2:
+				case 3:
+					vNeuralTiles[y][x] = pathfinding_grid[y][x] = 1;
+					break;
+				default:
+					break;
+			}
+
+			if(finishPos == vec2(-1, -1) && pTiles[Index].m_Index == 34)
+			{
+				finishPos = {x * 32.0f + 16.0f, y * 32.0f + 16.0f};
+			}
 
 			// Game layer
 			{
@@ -3012,12 +3042,53 @@ int CServer::Run()
 			}
 		}
 	}
+	printf("1\n");
+	AStar astar(pathfinding_grid, std::pair<int, int>((int)finishPos.x / 32, (int)finishPos.y / 32));
+	printf("2\n");
+
+	//std::pair<int, int> start = {4, 4};
+	//std::pair<int, int> goal = {4, 62};
+
+	//std::vector<std::pair<int, int>> path = a_star(start, goal, pathfinding_grid);
+
+	//if(!path.empty())
+	//{
+	//	std::cout << "Path found:\n";
+	//	for(const auto &step : path)
+	//	{
+	//		std::cout << "(" << step.first << ", " << step.second << ")\n";
+	//		pathfinding_grid[step.first][step.second] = 2;
+	//	}
+	//}
+	//else
+	//{
+	//	std::cout << "No path found.\n";
+	//}
+
+	//// Display grid for pathfinding algorithm
+	//for(size_t y = 0; y < pathfinding_grid.size(); y++)
+	//{
+	//	for(size_t x = 0; x < pathfinding_grid[y].size() / 2; x++)
+	//	{
+	//		cout << pathfinding_grid[y][x];
+	//	}
+	//	cout << endl;
+	//}
+
+	std::vector<float> vSpawnCumulativeReward(vSpawnPoints.size());
+	std::vector<int> vSpawnLives(vSpawnPoints.size());
+	std::vector<float> vSpawnProbabilities(vSpawnPoints.size(), 1);
+
+	spawn_probabilities_distribution = std::discrete_distribution<>(vSpawnProbabilities.begin(), vSpawnProbabilities.end());
 
 	//auto bot = AddBot("Bot");
 	//auto bot_2 = AddBot("Bot2");
-	int count_bots = 64;
+	int count_bots = 128;
 	std::vector<CPlayer *> vBots;
-	std::vector<vec2> vBotsSpawnPos;
+	std::vector<std::vector<std::pair<int, int>>> vBotsPath;
+	std::vector<vec2> vBotLastPos;
+	std::vector<int> vBotsSpawnPos;
+	std::vector<vec2> vBotsLastCheckPoint;
 	std::vector<float> vBotsCumulativeRewards;
 	std::vector<ModelInputInputs> vInputInputs;
 	std::vector<ModelInputBlocks> vInputBlocks;
@@ -3026,21 +3097,33 @@ int CServer::Run()
 	std::vector<vec2> vPrevHookPos;
 	if(count_bots)
 	{
+		vBotLastPos.resize(count_bots);
+		vBotsPath.resize(count_bots);
 		vInputInputs.resize(count_bots);
 		vInputBlocks.resize(count_bots);
 		vOutputs.resize(count_bots);
 		vIsPreviouslyHooked.resize(count_bots);
 		vPrevHookPos.resize(count_bots);
 		vBotsSpawnPos.resize(count_bots);
+		vBotsLastCheckPoint.resize(count_bots);
 		vBotsCumulativeRewards.resize(count_bots);
 
 		for(size_t i = 0; i < count_bots; i++)
 		{
 			std::string name = "Bot" + to_string(i);
 			auto bot = AddBot(name.c_str());
+			int iSpawnPoint = spawn_probabilities_distribution(gen);
+			auto decide_time = time_get_impl();
+			vBotsPath[i] = astar.findPath(std::pair<int, int>((int)vSpawnPoints[iSpawnPoint].x / 32, (int)vSpawnPoints[iSpawnPoint].y / 32));
+			auto now = time_get_impl();
+			cout << "Time to find: " << (float)(now - decide_time) / (float)time_freq() << " Length: " << vBotsPath[i].size() << endl;
+			bot->KillCharacter();
+			bot->TryRespawn(vSpawnPoints[iSpawnPoint]);
 			bot->GetCharacter()->SetSolo(true);
 			vBots.push_back(bot);
-			vBotsSpawnPos[i] = bot->GetCharacter()->m_Pos;
+			vBotsLastCheckPoint[i] = bot->GetCharacter()->m_Pos;
+			vBotsSpawnPos[i] = iSpawnPoint;
+			vSpawnLives[iSpawnPoint] += 1;
 			// auto tr = std::thread(RunNNForward, &model_manager, i, &vEvents, &vFinishEvents, &vInputs, &vOutputs);
 			// tr.detach();
 		}
@@ -3223,13 +3306,7 @@ int CServer::Run()
 
 				auto gamecontext = ((CGameContext *)GameServer());
 
-				//int model_angle = 0;
-				//int model_direction = 0;
-				//int model_hook = 0;
 				static int64_t decide_time;
-
-
-				//bool update = false;
 
 				// Handle bots
 				{
@@ -3243,7 +3320,7 @@ int CServer::Run()
 					static int dies = 0;
 					static int moved_distance = 0;
 
-					static std::vector<int> rewards;
+					static std::vector<float> rewards;
 					static float best_average = -999999.f;
 					//printf("7\n");
 					//printf("HAHHA1\n");
@@ -3260,21 +3337,41 @@ int CServer::Run()
 						// auto bot_2_character = gamecontext->GetPlayerChar(bot_2->GetCID());
 						bool died = false;
 						bool finished = false;
-						if(bot_character == nullptr || bot_character->Core()->m_Pos.x >= finish_pos)
+
+						if(bot_character != nullptr)
 						{
-							if(bot_character == nullptr)
+							vec2 bot_pos = bot_character->Core()->m_Pos;
+
+							int bot_block_pos_x = (int)(bot_pos.x / 32);
+							int bot_block_pos_y = (int)(bot_pos.y / 32);
+							int bot_block_index = bot_block_pos_y * map_width + bot_block_pos_x;
+
+							if(pTiles[bot_block_index].m_Index == 34)
+							{
+								finished = true;
+							}
+						}
+
+						if(bot_character == nullptr || bot_character->Core()->m_IsInFreeze || finished)
+						{
+							if(bot_character == nullptr || bot_character->Core()->m_IsInFreeze)
 							{
 								died = true;
 								dies += 1;
+								if(bot_character)
+								{
+									bot->KillCharacter();
+								}
 							}
-							else if(bot_character->Core()->m_Pos.x >= finish_pos)
+							else if(finished)
 							{
 								bot->KillCharacter();
-								finished = true;
 							}
+							
 							//decide_time = time_get_impl();
 							//bot_character->Core()->m_IsInFreeze
-							int iSpawnPoint = (int)round(random_float() * (float)vSpawnPoints.size()) % vSpawnPoints.size();
+							//int iSpawnPoint = (int)round(random_float() * (float)vSpawnPoints.size()) % vSpawnPoints.size();
+							int iSpawnPoint = spawn_probabilities_distribution(gen);
 							bot->TryRespawn(vSpawnPoints[iSpawnPoint]);
 							//summerr += time_get_impl() - decide_time;
 							bot_character = bot->GetCharacter();
@@ -3285,7 +3382,9 @@ int CServer::Run()
 								exit(1);
 							}
 
-							vBotsSpawnPos[i] = bot_character->m_PrevPos = bot_character->m_Pos = bot_character->Core()->m_Pos = vSpawnPoints[iSpawnPoint];
+							vBotsSpawnPos[i] = iSpawnPoint;
+							vSpawnLives[iSpawnPoint] += 1;
+							vBotsLastCheckPoint[i] = bot_character->m_PrevPos = bot_character->m_Pos = bot_character->Core()->m_Pos = vSpawnPoints[iSpawnPoint];
 							bot_character->Core()->m_Vel = vec2(2.f * random_float() - 1.f, 2.f * random_float() - 1.f);
 							vBotsCumulativeRewards[i] = 0;
 							//bot_character->Core()->m_Pos.x = 3.f * 32.f + random_float() * 4.f * 32.f;
@@ -3298,27 +3397,24 @@ int CServer::Run()
 
 							vec2 bot_pos = bot_character->Core()->m_Pos;
 
-							int index_x = (int)(bot_pos.x / 32);
-							int index_y = (int)(bot_pos.y / 32);
-							int Index = index_y * map_width + index_x;
+							int bot_block_pos_x = (int)(bot_pos.x / 32);
+							int bot_block_pos_y = (int)(bot_pos.y / 32);
+							int bot_block_index = bot_block_pos_y * map_width + bot_block_pos_x;
 
 							if(died)
 							{
-								reward -= 500; // 348 * 32;
+								reward -= 16; // 1000 500 348 * 32;
+								vBotsPath[i] = astar.findPath(std::pair<int, int>(bot_block_pos_x, bot_block_pos_y), 30);
 							}
 							/*else if(bot_character->m_Pos.x - vBotsSpawnPos[i].x >= 50.f * 32.f)
 							{
 								vBotsSpawnPos[i] = bot_character->m_Pos;
 								reward += 348 * 32;
 							}*/
-							else if(pTiles[Index].m_Index == 35 && vBotsSpawnPos[i].x < index_x * 32.f)
-							{
-								reward += 20; // 96 * 32;
-								vBotsSpawnPos[i] = vec2(index_x * 32.f, index_y * 32.f);
-							}
 							else if(finished)
 							{
-								reward += 1000; // 348 * 32;
+								reward += 32; // 348 * 32;
+								vBotsPath[i] = astar.findPath(std::pair<int, int>(bot_block_pos_x, bot_block_pos_y), 30);
 							}
 							//else if(bot_character->IsGrounded())
 							//{
@@ -3326,7 +3422,23 @@ int CServer::Run()
 							//}
 							else
 							{
-								reward += bot_character->m_Pos.x - bot_character->m_PrevPos.x;
+								// If touched the checkpoint reward
+								if(pTiles[bot_block_index].m_Index == 35 && vBotsLastCheckPoint[i].x < bot_block_pos_x * 32.f)
+								{
+									reward += 100; // 20 50 96 * 32;
+									vBotsLastCheckPoint[i] = vec2(bot_block_pos_x * 32.f, bot_block_pos_y * 32.f);
+								}
+								//reward += bot_character->m_Pos.x - bot_character->m_PrevPos.x;
+								int bot_last_block_pos_x = vBotLastPos[i].x / 32;
+								int bot_last_block_pos_y = vBotLastPos[i].y / 32;
+								if(bot_last_block_pos_x != bot_block_pos_x || bot_last_block_pos_y != bot_block_pos_y)
+								{
+									int prev_dist = astar.distanceToGoal(bot_last_block_pos_x, bot_last_block_pos_y);
+									vBotsPath[i] = astar.findPath(std::pair<int, int>(bot_block_pos_x, bot_block_pos_y), 30);
+									int path_dist_diff = prev_dist - astar.distanceToGoal(bot_block_pos_x, bot_block_pos_y);
+									reward += path_dist_diff;
+									moved_distance += path_dist_diff;
+								}
 								//cout << reward << endl;
 
 								/*if(reward < 0)
@@ -3340,7 +3452,7 @@ int CServer::Run()
 								}*/
 
 								// Encourage to run right faster
-								reward -= 0.1f; // 5
+								reward -= 0.01f; // 5
 
 								/*if(bot_character->m_Pos.x < 10.f * 32.f && reward <= 0)
 								{
@@ -3348,7 +3460,9 @@ int CServer::Run()
 								}*/
 							}
 
-							moved_distance += bot_character->m_Pos.x - bot_character->m_PrevPos.x;
+							// Add to cumulative spawn distance vector
+							int iOldSpawnPoint = vBotsSpawnPos[i];
+							vSpawnCumulativeReward[iOldSpawnPoint] += reward;
 							
 							// int prev_dist = (int)abs(bot_character->m_PrevPos.x - bot_2_character->m_PrevPos.x);
 							// int now_dist = (int)abs(bot_character->m_Pos.x - bot_2_character->m_Pos.x);
@@ -3379,15 +3493,75 @@ int CServer::Run()
 							rewards.push_back(reward);
 						}
 					}
-					//cout << "Time rewards: " << (float)(summerr) / (float)time_freq() << endl;
+					//cout << "Time rewards: " << (float)(time_get_impl() - decide_time) / (float)time_freq() << endl;
 					//printf("11\n");
 					model_manager.SaveReplays();
+					//cout << m_CurrentGameTick << endl;
 
 					if(m_CurrentGameTick != 0 && m_CurrentGameTick % update_tick == 0)
 					{
 						//printf("UPDATING\n");
-						float average = (float)std::accumulate(rewards.begin(), rewards.end(), 0) / (float)rewards.size();
+						float average = std::accumulate(rewards.begin(), rewards.end(), 0.0f) / (float)rewards.size();
 						rewards.clear();
+
+						if(m_CurrentGameTick % 20000 == 0)
+						{
+							printf("UPDATING\n");
+							std::vector<float> vAverageDistancePerSpawn(vSpawnCumulativeReward.size());
+							int count_counted = 0;
+							float cumulative_reward = 0;
+							//printf("1\n");
+							for(size_t i = 0; i < vSpawnCumulativeReward.size(); i++)
+							{
+								if(vSpawnLives[i] && vSpawnCumulativeReward[i] != 0.f)
+								{
+									//printf("1.1\n");
+									float dist = vSpawnCumulativeReward[i] / (float)vSpawnLives[i];
+									//printf("1.2\n");
+									//std::cout << "vSpawnCumulativeDistance: " << vSpawnCumulativeDistance[i] << endl;
+									//std::cout << "vSpawnLives[i]: " << vSpawnLives[i] << endl;
+									//std::cout << "Dist: " << dist << endl;
+									cumulative_reward += dist;
+									//printf("1.3\n");
+									vAverageDistancePerSpawn[i] = dist;
+									//printf("1.4\n");
+									count_counted += 1;
+								}
+							}
+							//printf("1.9\n");
+							float average_reward = 0;
+							if(cumulative_reward != 0.f && count_counted)
+							{
+								average_reward = cumulative_reward / (float)count_counted;
+							}
+							cout << "Average reward: " << average_reward << endl;
+							//printf("1.99\n");
+							float max_reward = *max_element(vAverageDistancePerSpawn.begin(), vAverageDistancePerSpawn.end());
+							cout << "Max reward: " << max_reward << endl;
+							//printf("2\n");
+							for(size_t i = 0; i < vSpawnCumulativeReward.size(); i++)
+							{
+								//printf("2.1\n");
+								if(!vSpawnLives[i] || !vSpawnCumulativeReward[i])
+								{
+									//printf("2.1.1\n");
+									vAverageDistancePerSpawn[i] = average_reward;
+								}
+								//printf("2.2\n");
+								vSpawnProbabilities[i] = max_reward - vAverageDistancePerSpawn[i] + 1;
+								//printf("2.3\n");
+								vSpawnLives[i] = 0;
+								//printf("2.4\n");
+								vSpawnCumulativeReward[i] = 0;
+							}
+							//printf("2.9\n");
+							spawn_probabilities_distribution = std::discrete_distribution<>(vSpawnProbabilities.begin(), vSpawnProbabilities.end());
+							//printf("2.10\n");
+							/*for(size_t i = 0; i < vSpawnProbabilities.size(); i++)
+							{
+								cout << vSpawnProbabilities[i] << endl;
+							}*/
+						}
 
 						auto demo_recorder = &m_aDemoRecorder[MAX_CLIENTS];
 
@@ -3445,6 +3619,7 @@ int CServer::Run()
 					}
 					//printf("12\n");
 					// apply new input
+					//decide_time = time_get_impl();
 
 					for(size_t i = 0; i < vBots.size(); i++)
 					{
@@ -3460,7 +3635,12 @@ int CServer::Run()
 						//printf("HAHHA3.3\n");
 						if(m_CurrentGameTick != 0 && m_CurrentGameTick % 1000 == 0)
 						{
-							int iSpawnPoint = (int)round(random_float() * (float)vSpawnPoints.size()) % vSpawnPoints.size();
+							// Add to cumulative spawn distance vector
+							//int iOldSpawnPoint = vBotsSpawnPos[i];
+							//vSpawnCumulativeDistance[iOldSpawnPoint] += bot_character_core->m_Pos.x - vSpawnPoints[iOldSpawnPoint].x;
+
+							//int iSpawnPoint = (int)round(random_float() * (float)vSpawnPoints.size()) % vSpawnPoints.size();
+							int iSpawnPoint = spawn_probabilities_distribution(gen);
 							bot->KillCharacter();
 							bot->TryRespawn(vSpawnPoints[iSpawnPoint]);
 
@@ -3469,7 +3649,9 @@ int CServer::Run()
 
 							bot_character->SetSolo(true);
 							
-							vBotsSpawnPos[i] = bot_character->m_PrevPos = bot_character->m_Pos = bot_character_core->m_Pos = vSpawnPoints[iSpawnPoint];
+							vBotsSpawnPos[i] = iSpawnPoint;
+							vSpawnLives[iSpawnPoint] += 1;
+							vBotsLastCheckPoint[i] = bot_character->m_PrevPos = bot_character->m_Pos = bot_character_core->m_Pos = vSpawnPoints[iSpawnPoint];
 							bot_character_core->m_Vel = vec2(2.f * random_float() - 1.f, 2.f * random_float() - 1.f);
 							vBotsCumulativeRewards[i] = 0;
 							// bot_2->KillCharacter();
@@ -3503,6 +3685,17 @@ int CServer::Run()
 						input_inputs->pos = {bot_pos.x - (int)bot_pos.x, bot_pos.y - (int)bot_pos.y};
 						input_inputs->m_vel = bot_character_core->m_Vel / 20.f;
 						input_inputs->is_grounded = bot_character->IsGrounded();
+
+						int UsedJumps = bot_character_core->m_JumpedTotal;
+						//cout << "m_Jumps: " << bot_character_core->m_Jumps << endl;
+						//cout << "m_JumpedTotal: " << bot_character_core->m_JumpedTotal << endl;
+						if(bot_character_core->m_Jumps > 1)
+						{
+							//cout << "HERE" << endl;
+							UsedJumps += !input_inputs->is_grounded;
+						}
+						input_inputs->can_jump = bot_character->IsGrounded() || (bot_character_core->m_Jumps - UsedJumps);
+						input_inputs->is_jumping = vOutputs[i].jump;
 
 						input_inputs->is_hooking = bot_character_core->m_HookState == HOOK_FLYING || bot_character_core->m_HookState == HOOK_GRABBED;
 						input_inputs->is_grabbed = bot_character_core->m_HookState == HOOK_GRABBED;
@@ -3550,21 +3743,54 @@ int CServer::Run()
 						int width = 33;
 						int height = 33;
 						int block_count = 0;
+						//cout << "Starting..." << endl;
+						//decide_time = time_get_impl();
+
+						int cur_index_x = std::clamp((int)(bot_pos.x / 32), 0, map_width - 1);
+						int cur_index_y = std::clamp((int)(bot_pos.y / 32), 0, map_height - 1);
+						int prev_index_x = std::clamp((int)(vBotLastPos[i].x / 32), 0, map_width - 1);
+						int prev_index_y = std::clamp((int)(vBotLastPos[i].y / 32), 0, map_height - 1);
+
+						vBotLastPos[i] = bot_pos;
+
+						if(cur_index_x == prev_index_x && cur_index_y == prev_index_y)
+						{
+							continue;
+						}
+
+						//printf("1\n");
+
+						int filled_count = 0;
+						
+						for(size_t j = 0; j < vBotsPath[i].size(); j++)
+						{
+							int x_move = vBotsPath[i][j].second;
+							int y_move = vBotsPath[i][j].first;
+							//cout << "x: " << x_move << " y: " << y_move << endl;
+							input_inputs->path[j] = vec2(x_move, y_move);
+							filled_count += 1;
+						}
+						for(size_t j = filled_count; j < sizeof(ModelInputInputs::path) / (sizeof(float) * 2); j++)
+						{
+							input_inputs->path[j] = vec2(0.f, 0.f);
+						}
+						//printf("2\n");
 
 						for(size_t y = 0; y < height; y++)
+						{
 							for(size_t x = 0; x < width; x++)
 							{
-								int index_x = std::clamp((int)(bot_pos.x / 32 - width / 2 + x), 0, map_width-1);
-								int index_y = std::clamp((int)(bot_pos.y / 32 - height / 2 + y), 0, map_height-1);
+								int index_x = std::clamp((int)(bot_pos.x / 32 - width / 2 + x), 0, map_width - 1);
+								int index_y = std::clamp((int)(bot_pos.y / 32 - height / 2 + y), 0, map_height - 1);
 								int Index = index_y * map_width + index_x;
+
 								/*if(y == height / 2 && width / 2 == x)
 								{
 									continue;
 								}*/
-								//input_blocks->blocks[block_count] = pTiles[Index].m_Index;
+								// input_blocks->blocks[block_count] = pTiles[Index].m_Index;
 								switch(pTiles[Index].m_Index)
 								{
-								case 0:
 								case 1:
 								case 2:
 								case 3:
@@ -3574,8 +3800,30 @@ int CServer::Run()
 									input_blocks->blocks[block_count] = 0;
 									break;
 								}
+
+								/*switch(pTiles[Index].m_Index)
+								{
+								case 1:
+									cout << "H";
+									break;
+								case 2:
+									cout << "D";
+									break;
+								case 3:
+									cout << "U";
+									break;
+								default:
+									cout << " ";
+									break;
+								}*/
+								
 								block_count += 1;
 							}
+							//cout << endl;
+						}
+						//summerr += time_get_impl() - decide_time;
+
+
 						//printf("HAHHA3.4\n");
 						//vInputs[i] = input;
 						//printf("HAHHA3.4.1\n");
@@ -3611,6 +3859,7 @@ int CServer::Run()
 								<< " Should be: " << should_angle
 								<< " Reward: " << reward << std::endl;*/
 					}
+					//cout << "Time calcs: " << (float)summerr / (float)time_freq() << endl;
 
 					//auto player_char = gamecontext->GetPlayerChar(c);
 
@@ -3702,7 +3951,7 @@ int CServer::Run()
 					vec2 center_coords = vec2(24.5f * 32.0f, 20.5f * 32.0f);
 
 					auto bot_character = bot->GetCharacter();
-					int jump = 0;
+					int model_jump = 0;
 					// printf("HAHHA2222\n");
 					vec2 model_angle;
 					int model_direction = 0;
@@ -3726,6 +3975,7 @@ int CServer::Run()
 						model_angle = returned_model.angle * 299.f;
 						model_direction = returned_model.direction;
 						model_hook = returned_model.hook;
+						model_jump = returned_model.jump;
 						// printf("HAHHA33.3\n");
 						// printf("HAHHA34\n");
 						//  static ModelManager model_manager;
@@ -3790,7 +4040,7 @@ int CServer::Run()
 					mem_zero(&pApplyInput, sizeof(pApplyInput));
 					pApplyInput.m_TargetX = (int)round(model_angle.x);
 					pApplyInput.m_TargetY = (int)round(model_angle.y);
-					pApplyInput.m_Jump = jump;
+					pApplyInput.m_Jump = model_jump;
 					pApplyInput.m_Direction = model_direction;
 					pApplyInput.m_Hook = model_hook;
 
@@ -3901,7 +4151,8 @@ int CServer::Run()
 					break;
 				}
 				//printf("21\n");
-				//cout << "Time to tick: " << (float)(time_get_impl() - decide_time) / (float)time_freq() << endl;
+				now = time_get_impl();
+				//cout << "Time to tick: " << (float)(now - decide_time) / (float)time_freq() << endl;
 				decide_time = time_get_impl();
 
 				/*if(m_CurrentGameTick == 1000)
@@ -3919,7 +4170,7 @@ int CServer::Run()
 			// snap game
 			if(NewTicks)
 			{
-				if(Config()->m_SvHighBandwidth || (m_CurrentGameTick % 2) == 0)
+				if((Config()->m_SvHighBandwidth || (m_CurrentGameTick % 2) == 0) && m_aDemoRecorder[MAX_CLIENTS].IsRecording())
 					DoSnapshot();
 
 				UpdateClientRconCommands();

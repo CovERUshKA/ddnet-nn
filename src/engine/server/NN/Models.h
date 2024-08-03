@@ -1,7 +1,10 @@
 #pragma once
 
+#include <chrono>
+#include <iostream>
 #include <torch/torch.h>
 #include <math.h>
+#include <ctime>
 
 // Network model for Proximal Policy Optimization on Incy Wincy.
 struct ActorCriticImpl : public torch::nn::Module 
@@ -25,28 +28,36 @@ struct ActorCriticImpl : public torch::nn::Module
 	    actor_network(torch::nn::Sequential(
 		    torch::nn::Linear(n_in, 2048),
 		    torch::nn::ReLU(),
-		    //torch::nn::Dropout(0.2),
 		    torch::nn::Linear(2048, 1024),
 		    torch::nn::ReLU(),
 		    //torch::nn::Dropout(0.2),
-		    //torch::nn::Linear(1024, 512),
-		    //torch::nn::ReLU(),
+		    torch::nn::Linear(1024, 512),
+		    torch::nn::ReLU(),
 		    //torch::nn::Dropout(0.2),
-		    torch::nn::Linear(1024, n_out),
+		    torch::nn::Linear(512, 256),
+		    torch::nn::ReLU(),
+		    //torch::nn::Dropout(0.2),
+		    torch::nn::Linear(256, 128),
+		    torch::nn::ReLU(),
+		    torch::nn::Linear(128, n_out),
 			torch::nn::Tanh())),
           mu_(torch::full(n_out, 0.)),
           log_std_(torch::full(n_out, std)),
 	    critic_network(torch::nn::Sequential(
 		    torch::nn::Linear(n_in, 1024),
 		    torch::nn::ReLU(),
-		    //torch::nn::Dropout(0.2),
 		    torch::nn::Linear(1024, 512),
 		    torch::nn::ReLU(),
 		    //torch::nn::Dropout(0.2),
-		    //torch::nn::Linear(512, 256),
-		    //torch::nn::ReLU(),
+		    torch::nn::Linear(512, 256),
+		    torch::nn::ReLU(),
 		    //torch::nn::Dropout(0.2),
-		    torch::nn::Linear(512, n_out),
+		    torch::nn::Linear(256, 128),
+		    torch::nn::ReLU(),
+		    torch::nn::Linear(128, 64),
+		    torch::nn::ReLU(),
+		    //torch::nn::Dropout(0.2),
+		    torch::nn::Linear(64, n_out),
 		    torch::nn::ReLU(),
 		    torch::nn::Linear(n_out, 1)
         ))
@@ -75,7 +86,7 @@ struct ActorCriticImpl : public torch::nn::Module
     }
 
     // Forward pass.
-    auto forward(torch::Tensor x) -> std::tuple<torch::Tensor, torch::Tensor> 
+    auto actor_forward(torch::Tensor x) -> torch::Tensor
     {
 	    //torch::NoGradGuard no_grad;
         // Actor.
@@ -86,28 +97,55 @@ struct ActorCriticImpl : public torch::nn::Module
 	    //mu_ = torch::relu(a_lin3_->forward(mu_));
 	    //mu_ = torch::tanh(a_lin4_->forward(mu_));
 	    mu_ = actor_network->forward(x);
-        // Critic.
-        //torch::Tensor val = torch::relu(c_lin1_->forward(x));
-        //val = torch::relu(c_lin2_->forward(val));
-	    ////val = torch::relu(c_lin3_->forward(val));
-	    //val = torch::relu(c_lin4_->forward(val));
-        //val = c_val_->forward(val);
-	    torch::Tensor val = critic_network->forward(x);
 
-        if (this->is_training()) 
-        {
-		    //std::lock_guard<std::mutex> guard(g_mutex);
-            torch::NoGradGuard no_grad;
-		    //printf("1\n");
-            torch::Tensor action = at::normal(mu_, log_std_.exp().expand_as(mu_));
-		    //printf("2\n");
-	        //action = torch::tanh(action); // Squash the sampled action to be within the range [-1, 1]
-            return std::make_tuple(action, val);  
-        }
-        else
-        {
-            return std::make_tuple(mu_, val);
-        }
+	    return mu_;
+    }
+
+    // Forward pass.
+    auto critic_forward(torch::Tensor x) -> torch::Tensor
+    {
+	    // Critic.
+	    // torch::Tensor val = torch::relu(c_lin1_->forward(x));
+	    // val = torch::relu(c_lin2_->forward(val));
+	    ////val = torch::relu(c_lin3_->forward(val));
+	    // val = torch::relu(c_lin4_->forward(val));
+	    // val = c_val_->forward(val);
+	    torch::Tensor val = critic_network->forward(x);
+	    return val;
+    }
+
+	// Forward pass.
+    auto normal_actor(torch::Tensor x) -> torch::Tensor
+    {
+	    if(this->is_training())
+	    {
+		    // std::lock_guard<std::mutex> guard(g_mutex);
+		    torch::NoGradGuard no_grad;
+		    // printf("1\n");
+		    auto std = log_std_.exp().expand_as(x); // .to(torch::kCPU)
+		    //auto decide_time = std::chrono::high_resolution_clock::now();
+
+		    //auto std_cpu = std.contiguous().to(torch::kCPU); // .to(torch::kCPU)
+
+		    // printf("33.0\n");
+		    //auto end = std::chrono::high_resolution_clock::now();
+		    //std::chrono::duration<double> elapsed = end - decide_time;
+		    //std::cout << "Elapsed std: " << elapsed.count() << " seconds" << std::endl;
+		    //std::cout << std_cpu.sizes() << std::endl;
+		    //torch::Tensor action = at::normal(x.to(torch::kCPU), std);
+			//decide_time = std::chrono::high_resolution_clock::now();
+		    torch::Tensor action = at::normal(x, std);
+			//end = std::chrono::high_resolution_clock::now();
+		    //elapsed = end - decide_time;
+			//std::cout << "Elapsed normal: " << elapsed.count() << " seconds" << std::endl;
+		    // printf("2\n");
+		    // action = torch::tanh(action); // Squash the sampled action to be within the range [-1, 1]
+		    return action;
+	    }
+	    else
+	    {
+		    return x;
+	    }
     }
 
     // Initialize network.

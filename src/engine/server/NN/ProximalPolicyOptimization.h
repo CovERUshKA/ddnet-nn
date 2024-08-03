@@ -189,6 +189,18 @@ public:
 			}
 		}
 
+		if(start != 0 && dones_concat[start - 1] != true)
+		{
+			for(size_t i = start; i < end; i++)
+			{
+				if(dones_concat[i])
+				{
+					start = i + 1;
+					break;
+				}
+			}
+		}
+
 		states_concatenated_ret = states_concatenated.index({torch::indexing::Slice(start, end)});
 		actions_concat_ret = actions_concat.index({torch::indexing::Slice(start, end)});
 		log_probs_concat_ret = log_probs_concat.index({torch::indexing::Slice(start, end)});
@@ -251,10 +263,11 @@ auto PPO::returns(VT& rewards, VT& dones, VT& vals, double gamma, double lambda)
     return returns;
 }
 
-torch::Tensor compute_advantages(ActorCritic &ac, const torch::Tensor &returns, const torch::Tensor &states)
+torch::Tensor compute_advantages(ActorCritic &ac, const torch::Tensor &returns, const torch::Tensor &values)
 {
-	auto [policy_actions, values] = ac->forward(states);
-	return returns - values.squeeze(-1);
+	//auto values = ac->critic_forward(states);
+	//std::cout << values.sizes() << std::endl;
+	return returns - values;
 }
 
 torch::Tensor calculate_returns(const torch::Tensor &rewards, const std::vector<bool> &dones, float gamma)
@@ -358,9 +371,9 @@ auto PPO::update(ActorCritic &ac,
 			torch::Tensor cpy_sta = states_cpy;
 			// std::cout << cpy_sta.sizes() << std::endl;
 			// printf("UPDATING0.2\n");
-			torch::Tensor cpy_inputs = cpy_sta.index({"...", torch::indexing::Slice(0, 16)});
+			torch::Tensor cpy_inputs = cpy_sta.index({"...", torch::indexing::Slice(0, 78)});
 			// printf("UPDATING0.3\n");
-			torch::Tensor cpy_blocks = torch::one_hot(cpy_sta.index({"...", torch::indexing::Slice(16, 1105)}).to(torch::kInt64), 4).to(torch::kF32).view({cpy_sta.size(0), -1});
+			torch::Tensor cpy_blocks = torch::one_hot(cpy_sta.index({"...", torch::indexing::Slice(78, 1167)}).to(torch::kInt64), 4).to(torch::kF32).view({cpy_sta.size(0), -1});
 			// printf("UPDATING0.4\n");
 			cpy_sta = torch::cat({cpy_inputs, cpy_blocks}, 1);
 			// std::cout << cpy_sta.sizes() << std::endl;
@@ -375,8 +388,11 @@ auto PPO::update(ActorCritic &ac,
 			// printf("UPDATING0.1.3.2\n");
 			auto returnsee = calculate_returns(rewards_cpy, dones_cpy, gamma);
 			torch::Tensor cpy_ret = normalize_rewards(returnsee);
-			// printf("UPDATING0.1.4\n");
-			torch::Tensor cpy_adv = compute_advantages(ac, cpy_ret, cpy_sta.view({cpy_sta.size(0), 1, 4372}));
+			//printf("UPDATING0.1.4\n");
+			auto val = ac->critic_forward(cpy_sta);
+			//printf("UPDATING0.1.5\n");
+			//std::cout << val.sizes() << std::endl;
+			torch::Tensor cpy_adv = compute_advantages(ac, cpy_ret, val /*cpy_sta.view({cpy_sta.size(0), 1, 4372})*/);
 			// std::cout << cpy_ret << std::endl;
 
 			/*for (uint b=0;b<mini_batch_size;b++) {
@@ -388,28 +404,32 @@ auto PPO::update(ActorCritic &ac,
 			    cpy_ret[b] = returns[idx];
 			    cpy_adv[b] = advantages[idx];
 			}*/
-			// printf("UPDATING1.1\n");
-			auto av = ac->forward(cpy_sta); // action value pairs
-							// printf("UPDATING1.2\n");
-			auto action = std::get<0>(av);
+			//printf("UPDATING1.1\n");
+			auto action = ac->actor_forward(cpy_sta);
+			//printf("33.0\n");
+			//std::cout << action.sizes() << std::endl;
+			//std::cout << cpy_act.sizes() << std::endl;
+			action = ac->normal_actor(action);
+			//auto av = ac->forward(cpy_sta); // action value pairs
+			//printf("UPDATING1.2\n");
+			//auto action = std::get<0>(av);
 			auto entropy = ac->entropy().mean();
+			//printf("UPDATING1.3\n");
 			auto new_log_prob = ac->log_prob(cpy_act);
-			// printf("UPDATING1.3\n");
+			//printf("UPDATING1.4\n");
 			auto old_log_prob = cpy_log;
-			// printf("UPDATING1.3.1\n");
+			//printf("UPDATING1.4.1\n");
 			// std::cout << new_log_prob.sizes() << " " << old_log_prob.sizes() << std::endl;
 			auto ratio = (new_log_prob - old_log_prob).exp();
-			// printf("UPDATING1.4\n");
+			//printf("UPDATING1.5\n");
 			// std::cout << ratio.sizes() << std::endl;
 			// std::cout << cpy_adv.sizes() << std::endl;
 			auto surr1 = ratio * cpy_adv;
-			// printf("UPDATING1.4.1\n");
+			//printf("UPDATING1.5.1\n");
 			auto surr2 = torch::clamp(ratio, 1. - clip_param, 1. + clip_param) * cpy_adv;
-			// printf("UPDATING1.5\n");
-			auto val = std::get<1>(av);
-			// printf("UPDATING1.6\n");
+			//printf("UPDATING1.6\n");
 			auto actor_loss = -torch::min(surr1, surr2).mean();
-			// printf("UPDATING1.7\n");
+			//printf("UPDATING1.7\n");
 			auto critic_loss = torch::nn::functional::mse_loss(val, cpy_ret); //(cpy_ret - val).pow(2).mean();
 			// printf("UPDATING1.8\n");
 			auto loss = 0.5 * critic_loss + actor_loss - beta * entropy;
