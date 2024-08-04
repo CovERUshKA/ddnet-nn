@@ -7,11 +7,12 @@
 #include "ProximalPolicyOptimization.h"
 // #include <iostream>
 #include "ModelManager.h"
+#include <c10/cuda/CUDAGuard.h>
 
 int64_t n_in = 4434; // 1088 + 11 278539     4352 + 16
 int64_t n_out = 9;
 double stdrt = 2e-2;
-double learning_rate = 1e-5; // Default: 1e-3
+double learning_rate = 1e-4; // Default: 1e-3
 
 int64_t mini_batch_size = 16384; // 4096, 8192, 16384, 32768
 int64_t ppo_epochs = 8; // Default: 4
@@ -31,7 +32,10 @@ VT log_probs;
 //VT returns;
 //VT values;
 
-auto device = torch::kCUDA; // kCPU kCUDA
+static auto precision = torch::kF32;
+//auto precision_dtype = float; // at::Half
+static auto device = torch::kCUDA; // kCPU kCUDA
+static at::cuda::CUDAStream myStream = at::cuda::getStreamFromPool();
 
 // Function to generate random hyperparameters
 void generate_random_hyperparameters()
@@ -72,7 +76,7 @@ ModelManager::ModelManager(size_t batch_size, size_t count_players){
 	//torch::set_num_threads(4);
 	//torch::set_num_interop_threads(4);
 	//generate_random_hyperparameters();
-	ac->to(torch::kF32);
+	ac->to(precision);
 	//ac->normal(0., stdrt);
 	//ac->eval();
 	opt = std::make_shared<torch::optim::Adam>(ac->parameters(), learning_rate);
@@ -85,6 +89,7 @@ ModelManager::ModelManager(size_t batch_size, size_t count_players){
 	//Sleep(7000);
 	// opt(ac->parameters(), 1e-3);
 	PPO::Initilize(batch_size, count_players);
+	//at::cuda::setCurrentCUDAStream(myStream);
 }
 
 std::vector<ModelOutput> ModelManager::Decide(std::vector<ModelInputInputs> &input_inputs, std::vector<ModelInputBlocks>& input_blocks)
@@ -92,32 +97,38 @@ std::vector<ModelOutput> ModelManager::Decide(std::vector<ModelInputInputs> &inp
 	torch::NoGradGuard no_grad;
 	//printf("HERE\n");
 	std::vector<ModelOutput> outputs;
-	// ac->to(torch::kF32);
-	// ac->normal(0., stdrt);
+
 	//printf("Count: %i\n", (int)input.size());
-	//auto decide_time = std::chrono::steady_clock::now();
-	torch::Tensor state_inputs = torch::from_blob(input_inputs.data(), {(long long)input_inputs.size(), sizeof(ModelInputInputs) / 4}, torch::kF32);
+	torch::Tensor state_inputs = torch::from_blob(input_inputs.data(), {(long long)input_inputs.size(), sizeof(ModelInputInputs) / 4}, torch::kF32).to(precision);
 	torch::Tensor blocks_input = torch::from_blob(input_blocks.data(), {(long long)input_blocks.size(), sizeof(ModelInputBlocks) / sizeof(long long)}, torch::kInt64);
 	//printf("1\n");
 	//std::memcpy(state.data_ptr(), &(input), sizeof(input));
-	state_inputs = state_inputs.to(device);
-	blocks_input = blocks_input.to(device);
+	state_inputs = state_inputs.to(device, true);
+	//auto decide_time = std::chrono::high_resolution_clock::now();
+
+	blocks_input = blocks_input.to(device, true);
+	//auto now = std::chrono::high_resolution_clock::now();
+	//std::cout << "Time to transfer: " << std::chrono::duration<double>(now - decide_time).count() << std::endl;
+	
 	//printf("1.1\n");
 	auto one_hotted_blocks = torch::one_hot(blocks_input, 4);
 	//printf("1.2\n");
-	one_hotted_blocks = one_hotted_blocks.to(torch::kF32);
+	one_hotted_blocks = one_hotted_blocks.to(precision);
 	//printf("1.3\n");
 	one_hotted_blocks = one_hotted_blocks.view({(long long)input_inputs.size(), -1});
 	//printf("1.4\n");
 	torch::Tensor state_forward = torch::cat({state_inputs, one_hotted_blocks}, 1);
 	//printf("2\n");
 	//states.push_back(state);
-	//printf("33\n");
 	//  Play.
-	//int64_t decide_time = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
 	//cout << state_forward.sizes() << endl;
+	//auto decide_time = std::chrono::high_resolution_clock::now();
 	auto av = ac->actor_forward(state_forward);
+	//printf("2.1\n");
 	av = ac->normal_actor(av);
+	//auto now = std::chrono::high_resolution_clock::now();
+	//std::cout << "Time to forward + normal: " << (float)(std::chrono::duration_cast<std::chrono::nanoseconds>(now - decide_time).count()) / (float)std::chrono::nanoseconds(1s).count() << std::endl;
+	//std::cout << "Equals: " << (at::cuda::getCurrentCUDAStream() == at::cuda::getDefaultCUDAStream()) << std::endl;
 	//printf("33.0\n");
 	torch::Tensor state = torch::cat({state_inputs, blocks_input}, 1);
 	//printf("33.1\n");
@@ -150,16 +161,13 @@ std::vector<ModelOutput> ModelManager::Decide(std::vector<ModelInputInputs> &inp
 		}
 		std::cout << std::endl;
 	}*/
+	//auto decide_time = std::chrono::high_resolution_clock::now();
 
-	auto tActions = av;
-	torch::Tensor tLogProbs;
-	if(ac->is_training())
-	{
-		tLogProbs = ac->log_prob(tActions);
-		//tLogProbs = tLogProbs.to(torch::kCPU);
-	}
-	
-	auto tActions_cpu = tActions.to(torch::kCPU);
+	auto tActions = av.to(torch::kCUDA, true); // .to(torch::kCUDA)
+	//now = std::chrono::high_resolution_clock::now();
+	//std::cout << "Time to .to: " << (float)(std::chrono::duration_cast<std::chrono::nanoseconds>(now - decide_time).count()) / (float)std::chrono::nanoseconds(1s).count() << std::endl;
+	//printf("pre1\n");
+	auto tActions_cpu = av; // tActions.to(torch::kCPU) av
 	//tValues = tValues.to(torch::kCPU);
 
 	//printf("1\n");
@@ -182,7 +190,7 @@ std::vector<ModelOutput> ModelManager::Decide(std::vector<ModelInputInputs> &inp
 	auto jump_indices = torch::argmax(hooks, 1);
 	
 	//printf("5\n");
-	auto angle_x_vec = angle_x.accessor<float, 1>();
+	auto angle_x_vec = angle_x.accessor<float, 1>(); // at::Half
 	//printf("6\n");
 	auto angle_y_vec = angle_y.accessor<float, 1>();
 	//printf("7\n");
@@ -191,45 +199,52 @@ std::vector<ModelOutput> ModelManager::Decide(std::vector<ModelInputInputs> &inp
 	auto hook_indices_vec = hook_indices.accessor<int64_t, 1>();
 	//printf("9\n");
 	auto jump_indices_vec = jump_indices.accessor<int64_t, 1>();
-
+	
 	//decide_time = std::chrono::steady_clock::now();
 	//float time_sum = 0;
 	//auto temp_decide_time = std::chrono::steady_clock::now();
+
+	for(size_t i = 0; i < input_inputs.size(); ++i)
+	{
+		ModelOutput output;
+		// printf("5\n");
+		// auto temp_decide_time = std::chrono::steady_clock::now();
+
+		// auto now = std::chrono::steady_clock::now();
+		// time_sum += (float)(std::chrono::duration_cast<std::chrono::nanoseconds>(now - temp_decide_time).count()) / (float)std::chrono::nanoseconds(1s).count();
+		// printf("6\n");
+		// std::cout << angle_x_vec[i] << std::endl;
+		output.angle = {angle_x_vec[i], angle_y_vec[i]};
+		// printf("7\n");
+		output.direction = direction_indices_vec[i];
+		// std::cout << output.angle[0] << std::endl;
+		// printf("8\n");
+		output.hook = static_cast<bool>(hook_indices_vec[i]);
+		output.jump = static_cast<bool>(jump_indices_vec[i]);
+		// printf("9\n");
+		outputs.push_back(output);
+
+		// printf("10\n");
+	}
+	//printf("12323\n");
 	if(ac->is_training())
 	{
+		auto tLogProbs = ac->log_prob(tActions);
 		states.push_back(state);
 		actions.push_back(tActions);
 		//values.push_back(tValues);
 		log_probs.push_back(tLogProbs);
 	}
-	//auto now = std::chrono::steady_clock::now();
-	//time_sum += (float)(std::chrono::duration_cast<std::chrono::nanoseconds>(now - temp_decide_time).count()) / (float)std::chrono::nanoseconds(1s).count();
-	for(size_t i = 0; i < input_inputs.size(); ++i)
-	{
-		ModelOutput output;
-		//printf("5\n");
-		//auto temp_decide_time = std::chrono::steady_clock::now();
-
-		//auto now = std::chrono::steady_clock::now();
-		//time_sum += (float)(std::chrono::duration_cast<std::chrono::nanoseconds>(now - temp_decide_time).count()) / (float)std::chrono::nanoseconds(1s).count();
-		//printf("6\n");
-		output.angle = {angle_x_vec[i], angle_y_vec[i]};
-		//printf("7\n");
-		output.direction = direction_indices_vec[i];
-		//printf("8\n");
-		output.hook = static_cast<bool>(hook_indices_vec[i]);
-		output.jump = static_cast<bool>(jump_indices_vec[i]);
-		//printf("9\n");
-		outputs.push_back(output);
-
-		//printf("10\n");
-	}
+	//printf("ended\n");
+	//auto now = std::chrono::high_resolution_clock::now();
+	//std::cout << "Time to load: " << (float)(std::chrono::duration_cast<std::chrono::nanoseconds>(now - decide_time).count()) / (float)std::chrono::nanoseconds(1s).count() << std::endl;
+	//printf("Ended\n");
 
 	//for(size_t i = 0; i < input_inputs.size(); i++)
 	//{
 	//	ModelOutput output;
 	//	//cout << tensor_actions.sizes() << " " << tensor_actions.is_contiguous() << endl;
-	//	//torch::Tensor _state = torch::zeros({1, n_in}, torch::kF32);
+	//	//torch::Tensor _state = torch::zeros({1, n_in}, torch::kHalf);
 	//	//std::memcpy(_state.data_ptr(), state[i].data_ptr(), 1099 * sizeof(float));
 	//	if(ac->is_training())
 	//	{
@@ -298,10 +313,9 @@ std::vector<ModelOutput> ModelManager::Decide(std::vector<ModelInputInputs> &inp
 //	torch::NoGradGuard no_grad;
 //
 //	ModelOutput output;
-//	//ac->to(torch::kF32);
-//	//ac->normal(0., stdrt);
+//	
 //	//printf("22\n");
-//	torch::Tensor state = torch::zeros({1, n_in}, torch::kF32);
+//	torch::Tensor state = torch::zeros({1, n_in}, torch::kHalf);
 //	//printf("1\n");
 //	std::memcpy(state.data_ptr(), &(input), sizeof(input));
 //	state = state.to(device);
@@ -368,7 +382,7 @@ std::vector<ModelOutput> ModelManager::Decide(std::vector<ModelInputInputs> &inp
 
 void ModelManager::Reward(float reward, bool done)
 {
-	float don = (float)done;
+	//float don = (float)done;
 	if(!ac->is_training())
 	{
 		return;
@@ -426,12 +440,17 @@ void ModelManager::SaveReplays()
 	}*/
 	if(rewards.size())
 	{
-		torch::NoGradGuard no_grad;
-		torch::Tensor tRewards = torch::from_blob(rewards.data(), {(long long)rewards.size(), 1}, torch::kF32);
+		//torch::NoGradGuard no_grad;
 
-		tRewards = tRewards.to(device);
+		//torch::Tensor tRewards = torch::from_blob(rewards.data(), {(long long)rewards.size(), 1}, torch::kF32);
+		//torch::Tensor tDones = torch::from_blob(dones.data(), {(long long)dones.size(), 1}, torch::kF32);
 
-		PPO::save_replay(states[0], actions[0], log_probs[0], tRewards, dones);
+		//tRewards = tRewards.to(device, myStream);
+		//tDones = tDones.to(device, myStream);
+		//std::cout << tDones.sizes() << std::endl;
+
+
+		PPO::save_replay(states[0], actions[0], log_probs[0], rewards, dones);
 	}
 
 	states.clear();

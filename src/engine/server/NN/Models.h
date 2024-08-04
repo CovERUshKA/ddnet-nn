@@ -3,8 +3,10 @@
 #include <chrono>
 #include <iostream>
 #include <torch/torch.h>
+#include <torch/script.h>
 #include <math.h>
 #include <ctime>
+#include <c10/cuda/CUDACachingAllocator.h>
 
 // Network model for Proximal Policy Optimization on Incy Wincy.
 struct ActorCriticImpl : public torch::nn::Module 
@@ -121,24 +123,68 @@ struct ActorCriticImpl : public torch::nn::Module
 	    {
 		    // std::lock_guard<std::mutex> guard(g_mutex);
 		    torch::NoGradGuard no_grad;
-		    // printf("1\n");
-		    auto std = log_std_.exp().expand_as(x); // .to(torch::kCPU)
+		    //printf("1\n");
+		    //auto ten = x.to(torch::kCPU);
+
 		    //auto decide_time = std::chrono::high_resolution_clock::now();
+		    //log_std = log_std_cpu.to(torch::kCPU);
+		    //printf("1\n");
+		    x = x.to(torch::kCPU, true);
 
+		    auto std = log_std_.to(torch::kCPU, true).exp().expand_as(x); // .to(torch::kCPU)
+		    //printf("2\n");
+		    //std::cout << std << std::endl;
+
+		    //printf("3\n");
+		    //at::cuda::stream_synchronize(stream);
+		    //  Create a mask where tensor values are less than 0
+		    //auto mask = std < 0;
+
+		    // Print the mask to show which elements are negative
+		    //std::cout << "Mask (True indicates negative values): " << mask << std::endl;
+
+		    // Extract the negative elements using the mask
+		   // auto negative_elements = std.index({mask});
+
+		    // Print the negative elements
+		    //std::cout << "Negative Elements: " << negative_elements.numel() << std::endl;
+		    //if(negative_elements.numel())
+		    //{
+			    //std::cout << "Negative Elements: " << negative_elements << std::endl;
+		    //}
 		    //auto std_cpu = std.contiguous().to(torch::kCPU); // .to(torch::kCPU)
-
-		    // printf("33.0\n");
+		    /*std::cout << x.sizes() << std::endl;
+		    std::cout << std.sizes() << std::endl;
+		    std::cout << x.device() << std::endl;
+		    std::cout << std.device() << std::endl;
+		    std::cout << x.scalar_type() << std::endl;
+		    std::cout << std.scalar_type() << std::endl;
+		    printf("33.0\n");*/
 		    //auto end = std::chrono::high_resolution_clock::now();
+		    //auto ten = x.to(torch::kCPU);
+		    //printf("33.1\n");
 		    //std::chrono::duration<double> elapsed = end - decide_time;
 		    //std::cout << "Elapsed std: " << elapsed.count() << " seconds" << std::endl;
 		    //std::cout << std_cpu.sizes() << std::endl;
 		    //torch::Tensor action = at::normal(x.to(torch::kCPU), std);
 			//decide_time = std::chrono::high_resolution_clock::now();
-		    torch::Tensor action = at::normal(x, std);
+		    torch::Tensor action;
+		    try
+		    {
+				action = at::normal(x, std);
+		    }
+		    catch(const std::exception &e)
+		    {
+			    std::cout << "KEK: " << e.what() << std::endl;
+			    std::cout << std << std::endl;
+			    exit(1);
+		    }
+		    //printf("4\n");
+
 			//end = std::chrono::high_resolution_clock::now();
 		    //elapsed = end - decide_time;
 			//std::cout << "Elapsed normal: " << elapsed.count() << " seconds" << std::endl;
-		    // printf("2\n");
+		    //printf("2\n");
 		    // action = torch::tanh(action); // Squash the sampled action to be within the range [-1, 1]
 		    return action;
 	    }

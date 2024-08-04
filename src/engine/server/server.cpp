@@ -3316,9 +3316,13 @@ int CServer::Run()
 					int map_height = gamelayer->m_Height;
 					//printf("6\n");
 					int update_tick = 1000;
-					float finish_pos = 345.f * 32.f;
 					static int dies = 0;
 					static int moved_distance = 0;
+
+					// Rewards
+					static float checkpoint_reward = 100.f / 32.f;
+					static float die_reward = -500.f / 32.f;
+					static float finish_reward = 1000.f / 32.f;
 
 					static std::vector<float> rewards;
 					static float best_average = -999999.f;
@@ -3403,7 +3407,7 @@ int CServer::Run()
 
 							if(died)
 							{
-								reward -= 16; // 1000 500 348 * 32;
+								reward -= die_reward; // 1000 500 348 * 32;
 								vBotsPath[i] = astar.findPath(std::pair<int, int>(bot_block_pos_x, bot_block_pos_y), 30);
 							}
 							/*else if(bot_character->m_Pos.x - vBotsSpawnPos[i].x >= 50.f * 32.f)
@@ -3413,7 +3417,7 @@ int CServer::Run()
 							}*/
 							else if(finished)
 							{
-								reward += 32; // 348 * 32;
+								reward += finish_reward; // 348 * 32;
 								vBotsPath[i] = astar.findPath(std::pair<int, int>(bot_block_pos_x, bot_block_pos_y), 30);
 							}
 							//else if(bot_character->IsGrounded())
@@ -3425,7 +3429,7 @@ int CServer::Run()
 								// If touched the checkpoint reward
 								if(pTiles[bot_block_index].m_Index == 35 && vBotsLastCheckPoint[i].x < bot_block_pos_x * 32.f)
 								{
-									reward += 100; // 20 50 96 * 32;
+									reward += checkpoint_reward; // 20 50 96 * 32;
 									vBotsLastCheckPoint[i] = vec2(bot_block_pos_x * 32.f, bot_block_pos_y * 32.f);
 								}
 								//reward += bot_character->m_Pos.x - bot_character->m_PrevPos.x;
@@ -3452,7 +3456,7 @@ int CServer::Run()
 								}*/
 
 								// Encourage to run right faster
-								reward -= 0.01f; // 5
+								reward -= 0.02f; // 5
 
 								/*if(bot_character->m_Pos.x < 10.f * 32.f && reward <= 0)
 								{
@@ -3500,6 +3504,7 @@ int CServer::Run()
 
 					if(m_CurrentGameTick != 0 && m_CurrentGameTick % update_tick == 0)
 					{
+						//decide_time = time_get_impl();
 						//printf("UPDATING\n");
 						float average = std::accumulate(rewards.begin(), rewards.end(), 0.0f) / (float)rewards.size();
 						rewards.clear();
@@ -3604,6 +3609,8 @@ int CServer::Run()
 						//int64_t update_time = time_get_impl();
 						double avg_loss = 0;
 						model_manager.Update(avg_loss);
+						//cout << "Time update: " << (float)(time_get_impl() - decide_time) / (float)time_freq() << endl;
+
 						cout << "Avg. reward: " << average << " TPS: " << ticks_per_second << " Avg. Training Loss: " << avg_loss
 						     << " Dies: " << dies << " Avg. distance: " << (moved_distance / (dies + count_bots)) << endl;
 						dies = moved_distance = 0;
