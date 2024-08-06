@@ -12,13 +12,14 @@
 int64_t n_in = 4434; // 1088 + 11 278539     4352 + 16
 int64_t n_out = 9;
 double stdrt = 2e-2;
-double learning_rate = 1e-4; // Default: 1e-3
+double learning_rate = 2e-4; // Default: 1e-3
 
 int64_t mini_batch_size = 16384; // 4096, 8192, 16384, 32768
-int64_t ppo_epochs = 8; // Default: 4
+int64_t ppo_epochs = 4; // Default: 4
 double dbeta = 1e-3; // Default: 1e-3
 double clip_param = 0.2; // Default: 0.2
 float gamma = 0.99f; // Default: 0.99f
+float lambda = 0.95f;
 
 ActorCritic ac(n_in, n_out, stdrt);
 std::shared_ptr<torch::optim::Adam> opt; //(ac->parameters(), 1e-2);
@@ -32,7 +33,7 @@ VT log_probs;
 //VT returns;
 //VT values;
 
-static auto precision = torch::kF32;
+static auto precision = torch::kF32; // kHalf kF32
 //auto precision_dtype = float; // at::Half
 static auto device = torch::kCUDA; // kCPU kCUDA
 static at::cuda::CUDAStream myStream = at::cuda::getStreamFromPool();
@@ -71,7 +72,7 @@ void generate_random_hyperparameters()
 }
 
 ModelManager::ModelManager(size_t batch_size, size_t count_players){
-	printf("1 %i\n", torch::cuda::is_available());
+	printf("CUDA is available: %d\n", torch::cuda::is_available());
 	//net_module.eval();
 	//torch::set_num_threads(4);
 	//torch::set_num_interop_threads(4);
@@ -80,12 +81,11 @@ ModelManager::ModelManager(size_t batch_size, size_t count_players){
 	//ac->normal(0., stdrt);
 	//ac->eval();
 	opt = std::make_shared<torch::optim::Adam>(ac->parameters(), learning_rate);
-	//torch::load(ac, "train\\1722357361235\\models\\last_model.pt");
-	//torch::load(*opt, "train\\1722357361235\\models\\last_optimizer.pt");
+	//torch::load(ac, "train\\1722884286003\\models\\last_model.pt");
+	//torch::load(*opt, "train\\1722884286003\\models\\last_optimizer.pt");
 	cout << "Learning rate: " << learning_rate << " Gamma: " << gamma << " Beta: " << dbeta << " clip_param: " << clip_param << " Epochs: " << ppo_epochs << " Mini batch size: " << mini_batch_size << endl;
 	//Sleep(7000);
 	ac->to(device);
-	printf("2\n");
 	//Sleep(7000);
 	// opt(ac->parameters(), 1e-3);
 	PPO::Initilize(batch_size, count_players);
@@ -95,7 +95,7 @@ ModelManager::ModelManager(size_t batch_size, size_t count_players){
 std::vector<ModelOutput> ModelManager::Decide(std::vector<ModelInputInputs> &input_inputs, std::vector<ModelInputBlocks>& input_blocks)
 {
 	torch::NoGradGuard no_grad;
-	//printf("HERE\n");
+	//printf("Deciding...\n");
 	std::vector<ModelOutput> outputs;
 
 	//printf("Count: %i\n", (int)input.size());
@@ -190,7 +190,7 @@ std::vector<ModelOutput> ModelManager::Decide(std::vector<ModelInputInputs> &inp
 	auto jump_indices = torch::argmax(hooks, 1);
 	
 	//printf("5\n");
-	auto angle_x_vec = angle_x.accessor<float, 1>(); // at::Half
+	auto angle_x_vec = angle_x.accessor<float, 1>(); // at::Half float
 	//printf("6\n");
 	auto angle_y_vec = angle_y.accessor<float, 1>();
 	//printf("7\n");
@@ -235,10 +235,9 @@ std::vector<ModelOutput> ModelManager::Decide(std::vector<ModelInputInputs> &inp
 		//values.push_back(tValues);
 		log_probs.push_back(tLogProbs);
 	}
-	//printf("ended\n");
+	//printf("Decided\n");
 	//auto now = std::chrono::high_resolution_clock::now();
 	//std::cout << "Time to load: " << (float)(std::chrono::duration_cast<std::chrono::nanoseconds>(now - decide_time).count()) / (float)std::chrono::nanoseconds(1s).count() << std::endl;
-	//printf("Ended\n");
 
 	//for(size_t i = 0; i < input_inputs.size(); i++)
 	//{
@@ -493,7 +492,7 @@ void ModelManager::Update(double& avg_training_loss)
 	//torch::Tensor t_advantages = t_returns - t_values.slice(0, 0, rewards.size());
 	//printf("3");
 	//printf("UPDATING111\n");
-	avg_training_loss = PPO::update(ac, opt, rewards.size(), ppo_epochs, mini_batch_size, dbeta, gamma, device, clip_param);
+	avg_training_loss = PPO::update(ac, opt, rewards.size(), ppo_epochs, mini_batch_size, dbeta, gamma, lambda, device, clip_param);
 	//printf("UPDATed\n");
 	//printf("4");
 	// c = 0;

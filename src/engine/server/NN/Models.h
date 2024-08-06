@@ -60,7 +60,7 @@ struct ActorCriticImpl : public torch::nn::Module
 		    torch::nn::ReLU(),
 		    //torch::nn::Dropout(0.2),
 		    torch::nn::Linear(64, n_out),
-		    torch::nn::ReLU(),
+		    torch::nn::Tanh(),
 		    torch::nn::Linear(n_out, 1)
         ))
           
@@ -122,7 +122,7 @@ struct ActorCriticImpl : public torch::nn::Module
 	    if(this->is_training())
 	    {
 		    // std::lock_guard<std::mutex> guard(g_mutex);
-		    torch::NoGradGuard no_grad;
+		    //torch::NoGradGuard no_grad;
 		    //printf("1\n");
 		    //auto ten = x.to(torch::kCPU);
 
@@ -131,7 +131,9 @@ struct ActorCriticImpl : public torch::nn::Module
 		    //printf("1\n");
 		    x = x.to(torch::kCPU, true);
 
-		    auto std = log_std_.to(torch::kCPU, true).exp().expand_as(x); // .to(torch::kCPU)
+		    auto std = log_std_.to(torch::kCPU, true); // .to(torch::kCPU)
+		    at::cuda::stream_synchronize(at::cuda::getCurrentCUDAStream());
+		    std = std.exp().expand_as(x);
 		    //printf("2\n");
 		    //std::cout << std << std::endl;
 
@@ -168,6 +170,9 @@ struct ActorCriticImpl : public torch::nn::Module
 		    //std::cout << std_cpu.sizes() << std::endl;
 		    //torch::Tensor action = at::normal(x.to(torch::kCPU), std);
 			//decide_time = std::chrono::high_resolution_clock::now();
+			
+		    //std::cout << "Contains: " << std[0][0].item<float>() << std::endl;
+
 		    torch::Tensor action;
 		    try
 		    {
@@ -176,9 +181,15 @@ struct ActorCriticImpl : public torch::nn::Module
 		    catch(const std::exception &e)
 		    {
 			    std::cout << "KEK: " << e.what() << std::endl;
+			    std::cout << log_std_ << std::endl;
 			    std::cout << std << std::endl;
+			    std::cout << std.device() << std::endl;
+			    std::cout << std.dtype() << std::endl;
+			    std::cout << std.sizes() << std::endl;
 			    exit(1);
 		    }
+		    //std::cout << "Contains after: " << std[0][0].item<float>() << std::endl;
+
 		    //printf("4\n");
 
 			//end = std::chrono::high_resolution_clock::now();

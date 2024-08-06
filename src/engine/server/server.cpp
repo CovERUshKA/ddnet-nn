@@ -55,6 +55,7 @@
 #include <engine/server/NN/AStar.h>
 #include <numeric>
 #include <random>
+#include <fstream>
 //#include <EvolutionNet/EvolutionNet.hpp>
 
 extern bool IsInterrupted();
@@ -2995,21 +2996,18 @@ int CServer::Run()
 	std::discrete_distribution<> spawn_probabilities_distribution;
 
 	std::vector<vec2> vSpawnPoints;
-	vec2 finishPos = vec2(-1, -1);
+	std::vector <std::pair<int, int>> vFinishPoses;
 	std::vector<std::vector<int>> pathfinding_grid;
-	std::vector<std::vector<char>> vNeuralTiles;
 
 	auto gamecontext = ((CGameContext *)GameServer());
 	const CMapItemLayerTilemap *pTileMap = gamecontext->Layers()->GameLayer();
 	const CTile *pTiles = static_cast<CTile *>(Kernel()->RequestInterface<IMap>()->GetData(pTileMap->m_Data));
 
 	pathfinding_grid.resize(pTileMap->m_Height);
-	vNeuralTiles.resize(pTileMap->m_Height);
 
 	for(int y = 0; y < pTileMap->m_Height; y++)
 	{
 		pathfinding_grid[y].resize(pTileMap->m_Width);
-		vNeuralTiles[y].resize(pTileMap->m_Width);
 		for(int x = 0; x < pTileMap->m_Width; x++)
 		{
 			const int Index = y * pTileMap->m_Width + x;
@@ -3020,15 +3018,15 @@ int CServer::Run()
 				case 1:
 				case 2:
 				case 3:
-					vNeuralTiles[y][x] = pathfinding_grid[y][x] = 1;
+					pathfinding_grid[y][x] = 1;
 					break;
 				default:
 					break;
 			}
 
-			if(finishPos == vec2(-1, -1) && pTiles[Index].m_Index == 34)
+			if(pTiles[Index].m_Index == 34)
 			{
-				finishPos = {x * 32.0f + 16.0f, y * 32.0f + 16.0f};
+				vFinishPoses.push_back({y, x});
 			}
 
 			// Game layer
@@ -3042,9 +3040,9 @@ int CServer::Run()
 			}
 		}
 	}
-	printf("1\n");
-	AStar astar(pathfinding_grid, std::pair<int, int>((int)finishPos.x / 32, (int)finishPos.y / 32));
-	printf("2\n");
+	printf("Creating pathfinder...\n");
+	AStar astar(pathfinding_grid, vFinishPoses);
+	printf("Pathfinder created.\n");
 
 	//std::pair<int, int> start = {4, 4};
 	//std::pair<int, int> goal = {4, 62};
@@ -3080,7 +3078,7 @@ int CServer::Run()
 	std::vector<float> vSpawnProbabilities(vSpawnPoints.size(), 1);
 
 	spawn_probabilities_distribution = std::discrete_distribution<>(vSpawnProbabilities.begin(), vSpawnProbabilities.end());
-
+	printf("Adding bots...\n");
 	//auto bot = AddBot("Bot");
 	//auto bot_2 = AddBot("Bot2");
 	int count_bots = 128;
@@ -3113,10 +3111,10 @@ int CServer::Run()
 			std::string name = "Bot" + to_string(i);
 			auto bot = AddBot(name.c_str());
 			int iSpawnPoint = spawn_probabilities_distribution(gen);
-			auto decide_time = time_get_impl();
-			vBotsPath[i] = astar.findPath(std::pair<int, int>((int)vSpawnPoints[iSpawnPoint].x / 32, (int)vSpawnPoints[iSpawnPoint].y / 32));
-			auto now = time_get_impl();
-			cout << "Time to find: " << (float)(now - decide_time) / (float)time_freq() << " Length: " << vBotsPath[i].size() << endl;
+			//auto decide_time = time_get_impl();
+			vBotsPath[i] = astar.findPath(std::pair<int, int>((int)vSpawnPoints[iSpawnPoint].y / 32, (int)vSpawnPoints[iSpawnPoint].x / 32), 30);
+			//auto now = time_get_impl();
+			//cout << "Time to find: " << (float)(now - decide_time) / (float)time_freq() << " Length: " << vBotsPath[i].size() << endl;
 			bot->KillCharacter();
 			bot->TryRespawn(vSpawnPoints[iSpawnPoint]);
 			bot->GetCharacter()->SetSolo(true);
@@ -3130,7 +3128,11 @@ int CServer::Run()
 	}
 	printf("Bots added\n");
 
+	printf("Initializing neural model...\n");
 	ModelManager model_manager(count_bots * 1000, count_bots);
+	printf("Model initialized.\n");
+
+	printf("Creating train directory with folders...\n");
 
 	static auto dir_name = to_string(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count());
 	
@@ -3157,6 +3159,16 @@ int CServer::Run()
 		cout << "Can't make demos directory" << endl;
 		exit(1);
 	}
+
+	printf("Train directory with folders created.\n");
+
+	printf("Creating data.csv file for statistics...\n");
+
+	std::ofstream logger;
+	logger.open("train\\" + dir_name + "\\data.csv");
+	logger << "Step,Average reward,TPS,Dies,Average distance" << endl;
+
+	printf("data.csv file created and initialized.\n");
 
 	char aFilename[IO_MAX_PATH_LENGTH];
 	str_format(aFilename, sizeof(aFilename), "%s_%d_%llu.demo", m_aCurrentMap, m_NetServer.Address().port, time_get());
@@ -3318,11 +3330,13 @@ int CServer::Run()
 					int update_tick = 1000;
 					static int dies = 0;
 					static int moved_distance = 0;
+					static float cumulative_reward = 0;
 
 					// Rewards
 					static float checkpoint_reward = 100.f / 32.f;
-					static float die_reward = -500.f / 32.f;
+					static float die_reward = -500.f / 32.f; // -100.f / 32.f
 					static float finish_reward = 1000.f / 32.f;
+					static float step_reward = -0.01f;
 
 					static std::vector<float> rewards;
 					static float best_average = -999999.f;
@@ -3341,6 +3355,7 @@ int CServer::Run()
 						// auto bot_2_character = gamecontext->GetPlayerChar(bot_2->GetCID());
 						bool died = false;
 						bool finished = false;
+						bool freezed = false;
 
 						if(bot_character != nullptr)
 						{
@@ -3354,11 +3369,16 @@ int CServer::Run()
 							{
 								finished = true;
 							}
+
+							if(bot_character->m_FreezeTime || bot_character->Core()->m_IsInFreeze)
+							{
+								freezed = true;
+							}
 						}
 
-						if(bot_character == nullptr || bot_character->Core()->m_IsInFreeze || finished)
+						if(bot_character == nullptr || freezed || finished)
 						{
-							if(bot_character == nullptr || bot_character->Core()->m_IsInFreeze)
+							if(bot_character == nullptr || freezed)
 							{
 								died = true;
 								dies += 1;
@@ -3407,8 +3427,8 @@ int CServer::Run()
 
 							if(died)
 							{
-								reward -= die_reward; // 1000 500 348 * 32;
-								vBotsPath[i] = astar.findPath(std::pair<int, int>(bot_block_pos_x, bot_block_pos_y), 30);
+								reward += die_reward; // 1000 500 348 * 32;
+								vBotsPath[i] = astar.findPath(std::pair<int, int>(bot_block_pos_y, bot_block_pos_x), 30);
 							}
 							/*else if(bot_character->m_Pos.x - vBotsSpawnPos[i].x >= 50.f * 32.f)
 							{
@@ -3418,7 +3438,7 @@ int CServer::Run()
 							else if(finished)
 							{
 								reward += finish_reward; // 348 * 32;
-								vBotsPath[i] = astar.findPath(std::pair<int, int>(bot_block_pos_x, bot_block_pos_y), 30);
+								vBotsPath[i] = astar.findPath(std::pair<int, int>(bot_block_pos_y, bot_block_pos_x), 30);
 							}
 							//else if(bot_character->IsGrounded())
 							//{
@@ -3437,9 +3457,9 @@ int CServer::Run()
 								int bot_last_block_pos_y = vBotLastPos[i].y / 32;
 								if(bot_last_block_pos_x != bot_block_pos_x || bot_last_block_pos_y != bot_block_pos_y)
 								{
-									int prev_dist = astar.distanceToGoal(bot_last_block_pos_x, bot_last_block_pos_y);
-									vBotsPath[i] = astar.findPath(std::pair<int, int>(bot_block_pos_x, bot_block_pos_y), 30);
-									int path_dist_diff = prev_dist - astar.distanceToGoal(bot_block_pos_x, bot_block_pos_y);
+									int prev_dist = astar.distanceToGoal(bot_last_block_pos_y, bot_last_block_pos_x);
+									vBotsPath[i] = astar.findPath(std::pair<int, int>(bot_block_pos_y, bot_block_pos_x), 30);
+									int path_dist_diff = prev_dist - astar.distanceToGoal(bot_block_pos_y, bot_block_pos_x);
 									reward += path_dist_diff;
 									moved_distance += path_dist_diff;
 								}
@@ -3456,7 +3476,7 @@ int CServer::Run()
 								}*/
 
 								// Encourage to run right faster
-								reward -= 0.02f; // 5
+								reward += step_reward; // 5
 
 								/*if(bot_character->m_Pos.x < 10.f * 32.f && reward <= 0)
 								{
@@ -3467,6 +3487,7 @@ int CServer::Run()
 							// Add to cumulative spawn distance vector
 							int iOldSpawnPoint = vBotsSpawnPos[i];
 							vSpawnCumulativeReward[iOldSpawnPoint] += reward;
+							cumulative_reward += reward;
 							
 							// int prev_dist = (int)abs(bot_character->m_PrevPos.x - bot_2_character->m_PrevPos.x);
 							// int now_dist = (int)abs(bot_character->m_Pos.x - bot_2_character->m_Pos.x);
@@ -3484,7 +3505,6 @@ int CServer::Run()
 							rewards.push_back(-calc_angles_distance(actual_angle, should_angle));*/
 
 							bool is_done = died || finished || (m_CurrentGameTick % 1000 == 0) ? 1 : 0;
-
 							model_manager.Reward(reward, is_done);
 							if(!died && !finished)
 							{
@@ -3579,7 +3599,10 @@ int CServer::Run()
 							Storage()->RenameFile(demo_recorder->GetCurrentFilename(), path_demo.c_str(), IStorage::TYPE_ABSOLUTE);
 						}
 						//printf("111\n");
-						model_manager.Save("train\\" + dir_name + "\\models\\last");
+						if(m_CurrentGameTick % 20000 == 0)
+						{
+							model_manager.Save("train\\" + dir_name + "\\models\\last");
+						}
 						//printf("222\n");
 						if(average > best_average)
 						{
@@ -3610,10 +3633,10 @@ int CServer::Run()
 						double avg_loss = 0;
 						model_manager.Update(avg_loss);
 						//cout << "Time update: " << (float)(time_get_impl() - decide_time) / (float)time_freq() << endl;
-
-						cout << "Avg. reward: " << average << " TPS: " << ticks_per_second << " Avg. Training Loss: " << avg_loss
-						     << " Dies: " << dies << " Avg. distance: " << (moved_distance / (dies + count_bots)) << endl;
-						dies = moved_distance = 0;
+						logger << m_CurrentGameTick / 1000 << "," << cumulative_reward / (float)(dies + count_bots) << "," << ticks_per_second << "," << dies << "," << ((float)moved_distance / (float)(dies + count_bots)) << endl;
+						cout << "Avg. reward: " << cumulative_reward / (float)(dies + count_bots) << " TPS: " << ticks_per_second << " Avg. Training Loss: " << avg_loss
+						     << " Dies: " << dies << " Avg. distance: " << ((float)moved_distance / (float)(dies + count_bots)) << endl;
+						dies = moved_distance = cumulative_reward = 0;
 						//cout << "Time to update: " << (float)(time_get_impl() - update_time) / (float)time_freq() << endl;
 						//printf("end\n");
 						if(m_CurrentGameTick % 20000 == 0)
@@ -3627,7 +3650,6 @@ int CServer::Run()
 					//printf("12\n");
 					// apply new input
 					//decide_time = time_get_impl();
-
 					for(size_t i = 0; i < vBots.size(); i++)
 					{
 						//printf("HAHHA3.1\n");
