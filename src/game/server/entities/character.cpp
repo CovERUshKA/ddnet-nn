@@ -826,29 +826,29 @@ void CCharacter::TickDeferred()
 		GameServer()->Console()->Print(IConsole::OUTPUT_LEVEL_DEBUG, "game", aBuf);
 	}
 
-	{
-		int Events = m_Core.m_TriggeredEvents;
-		int CID = m_pPlayer->GetCID();
+	//{
+	//	int Events = m_Core.m_TriggeredEvents;
+	//	int CID = m_pPlayer->GetCID();
 
-		int64_t TeamMask = Teams()->TeamMask(Team(), -1, CID);
-		// Some sounds are triggered client-side for the acting player
-		// so we need to avoid duplicating them
-		int64_t TeamMaskExceptSelf = Teams()->TeamMask(Team(), CID, CID);
-		// Some are triggered client-side but only on Sixup
-		int64_t TeamMaskExceptSelfIfSixup = Server()->IsSixup(CID) ? TeamMaskExceptSelf : TeamMask;
+	//	int64_t TeamMask = Teams()->TeamMask(Team(), -1, CID);
+	//	// Some sounds are triggered client-side for the acting player
+	//	// so we need to avoid duplicating them
+	//	int64_t TeamMaskExceptSelf = Teams()->TeamMask(Team(), CID, CID);
+	//	// Some are triggered client-side but only on Sixup
+	//	int64_t TeamMaskExceptSelfIfSixup = Server()->IsSixup(CID) ? TeamMaskExceptSelf : TeamMask;
 
-		if(Events & COREEVENT_GROUND_JUMP)
-			GameServer()->CreateSound(m_Pos, SOUND_PLAYER_JUMP, TeamMaskExceptSelf);
+	//	if(Events & COREEVENT_GROUND_JUMP)
+	//		GameServer()->CreateSound(m_Pos, SOUND_PLAYER_JUMP, TeamMaskExceptSelf);
 
-		if(Events & COREEVENT_HOOK_ATTACH_PLAYER)
-			GameServer()->CreateSound(m_Pos, SOUND_HOOK_ATTACH_PLAYER, TeamMaskExceptSelfIfSixup);
+	//	if(Events & COREEVENT_HOOK_ATTACH_PLAYER)
+	//		GameServer()->CreateSound(m_Pos, SOUND_HOOK_ATTACH_PLAYER, TeamMaskExceptSelfIfSixup);
 
-		if(Events & COREEVENT_HOOK_ATTACH_GROUND)
-			GameServer()->CreateSound(m_Pos, SOUND_HOOK_ATTACH_GROUND, TeamMaskExceptSelf);
+	//	if(Events & COREEVENT_HOOK_ATTACH_GROUND)
+	//		GameServer()->CreateSound(m_Pos, SOUND_HOOK_ATTACH_GROUND, TeamMaskExceptSelf);
 
-		if(Events & COREEVENT_HOOK_HIT_NOHOOK)
-			GameServer()->CreateSound(m_Pos, SOUND_HOOK_NOATTACH, TeamMaskExceptSelf);
-	}
+	//	if(Events & COREEVENT_HOOK_HIT_NOHOOK)
+	//		GameServer()->CreateSound(m_Pos, SOUND_HOOK_NOATTACH, TeamMaskExceptSelf);
+	//}
 
 	if(m_pPlayer->GetTeam() == TEAM_SPECTATORS)
 	{

@@ -46,6 +46,11 @@ public:
 		return distance[Y][X];
 	}
 
+	int distanceToGoal(std::pair<int, int> pos)
+	{
+		return distance[pos.first][pos.second] == 0;
+	}
+
 	bool isGoal(int Y, int X)
 	{
 		return distance[Y][X] == 0;

@@ -2991,6 +2991,8 @@ int CServer::Run()
 		dbg_msg("server", "+-------------------------+");
 	}
 
+	int update_tick = 1000;
+
 	std::random_device rd;
 	std::mt19937 gen(rd());
 	std::discrete_distribution<> spawn_probabilities_distribution;
@@ -3018,6 +3020,7 @@ int CServer::Run()
 				case 1:
 				case 2:
 				case 3:
+				case 9:
 					pathfinding_grid[y][x] = 1;
 					break;
 				default:
@@ -3081,7 +3084,7 @@ int CServer::Run()
 	printf("Adding bots...\n");
 	//auto bot = AddBot("Bot");
 	//auto bot_2 = AddBot("Bot2");
-	int count_bots = 128;
+	int count_bots = 1024;
 	std::vector<CPlayer *> vBots;
 	std::vector<std::vector<std::pair<int, int>>> vBotsPath;
 	std::vector<vec2> vBotLastPos;
@@ -3093,6 +3096,10 @@ int CServer::Run()
 	std::vector<ModelOutput> vOutputs;
 	std::vector<bool> vIsPreviouslyHooked;
 	std::vector<vec2> vPrevHookPos;
+
+	// First is distance, second is tick
+	std::vector<std::pair<int, int>> vBotBestDistance;
+
 	if(count_bots)
 	{
 		vBotLastPos.resize(count_bots);
@@ -3105,6 +3112,7 @@ int CServer::Run()
 		vBotsSpawnPos.resize(count_bots);
 		vBotsLastCheckPoint.resize(count_bots);
 		vBotsCumulativeRewards.resize(count_bots);
+		vBotBestDistance.resize(count_bots);
 
 		for(size_t i = 0; i < count_bots; i++)
 		{
@@ -3112,7 +3120,8 @@ int CServer::Run()
 			auto bot = AddBot(name.c_str());
 			int iSpawnPoint = spawn_probabilities_distribution(gen);
 			//auto decide_time = time_get_impl();
-			vBotsPath[i] = astar.findPath(std::pair<int, int>((int)vSpawnPoints[iSpawnPoint].y / 32, (int)vSpawnPoints[iSpawnPoint].x / 32), 30);
+			auto spawn_point_pos = std::pair<int, int>((int)vSpawnPoints[iSpawnPoint].y / 32, (int)vSpawnPoints[iSpawnPoint].x / 32);
+			vBotsPath[i] = astar.findPath(spawn_point_pos, 30);
 			//auto now = time_get_impl();
 			//cout << "Time to find: " << (float)(now - decide_time) / (float)time_freq() << " Length: " << vBotsPath[i].size() << endl;
 			bot->KillCharacter();
@@ -3122,6 +3131,7 @@ int CServer::Run()
 			vBotsLastCheckPoint[i] = bot->GetCharacter()->m_Pos;
 			vBotsSpawnPos[i] = iSpawnPoint;
 			vSpawnLives[iSpawnPoint] += 1;
+			vBotBestDistance[i] = {astar.distanceToGoal(spawn_point_pos), 0};
 			// auto tr = std::thread(RunNNForward, &model_manager, i, &vEvents, &vFinishEvents, &vInputs, &vOutputs);
 			// tr.detach();
 		}
@@ -3129,7 +3139,7 @@ int CServer::Run()
 	printf("Bots added\n");
 
 	printf("Initializing neural model...\n");
-	ModelManager model_manager(count_bots * 1000, count_bots);
+	ModelManager model_manager(count_bots * update_tick, count_bots);
 	printf("Model initialized.\n");
 
 	printf("Creating train directory with folders...\n");
@@ -3163,17 +3173,27 @@ int CServer::Run()
 	printf("Train directory with folders created.\n");
 
 	printf("Creating data.csv file for statistics...\n");
-
 	std::ofstream logger;
-	logger.open("train\\" + dir_name + "\\data.csv");
-	logger << "Step,Average reward,TPS,Dies,Average distance" << endl;
+	{
+		char aFilename[IO_MAX_PATH_LENGTH];
+		/*std::cout << model_manager.GetLearningRate() << std::endl;
+		std::cout << model_manager.GetMiniBatchSize() << std::endl;
+		std::cout << model_manager.GetCountPPOEpochs() << std::endl;
+		std::cout << count_bots << std::endl;
+		std::cout << update_tick << std::endl;*/
+		sprintf_s(aFilename, sizeof(aFilename), "lr%.1embs%lldppoe%lldbots%drpb%d.csv", model_manager.GetLearningRate(), model_manager.GetMiniBatchSize(), model_manager.GetCountPPOEpochs(), count_bots, update_tick);
+		logger.open("train\\" + dir_name + "\\" + aFilename);
+		logger << "Step,Average reward,TPS,Dies,Average distance,Training loss,Learning rate,Time since start,Time to decide,Time to tick,Time rest,Time pre forward,Time forward,Time normal,Time to cpu,Time process last" << endl;
+	}
 
 	printf("data.csv file created and initialized.\n");
-
-	char aFilename[IO_MAX_PATH_LENGTH];
-	str_format(aFilename, sizeof(aFilename), "%s_%d_%llu.demo", m_aCurrentMap, m_NetServer.Address().port, time_get());
-	string path_demo = "train/" + dir_name + "/demos/" + aFilename;
-	int ret = m_aDemoRecorder[MAX_CLIENTS].Start(Storage(), m_pConsole, path_demo.c_str(), GameServer()->NetVersion(), m_aCurrentMap, &m_aCurrentMapSha256[MAP_TYPE_SIX], m_aCurrentMapCrc[MAP_TYPE_SIX], "server", m_aCurrentMapSize[MAP_TYPE_SIX], m_apCurrentMapData[MAP_TYPE_SIX]);
+	string path_demo;
+	{
+		char aFilename[IO_MAX_PATH_LENGTH];
+		str_format(aFilename, sizeof(aFilename), "%s_%d_%llu.demo", m_aCurrentMap, m_NetServer.Address().port, time_get());
+		path_demo = "train/" + dir_name + "/demos/" + aFilename;
+		int ret = m_aDemoRecorder[MAX_CLIENTS].Start(Storage(), m_pConsole, path_demo.c_str(), GameServer()->NetVersion(), m_aCurrentMap, &m_aCurrentMapSha256[MAP_TYPE_SIX], m_aCurrentMapCrc[MAP_TYPE_SIX], "server", m_aCurrentMapSize[MAP_TYPE_SIX], m_apCurrentMapData[MAP_TYPE_SIX]);
+	}
 	
 	// start game
 	{
@@ -3318,7 +3338,17 @@ int CServer::Run()
 
 				auto gamecontext = ((CGameContext *)GameServer());
 
-				static int64_t decide_time;
+				static std::chrono::high_resolution_clock::time_point decide_time = std::chrono::high_resolution_clock::now();
+				static float cumulative_time_to_decide = 0;
+				static float cumulative_time_to_tick = 0;
+				static float cumulative_time_rest = 0;
+
+				// Decide times
+				static double cumulative_time_pre_forward = 0;
+				static double cumulative_time_forward = 0;
+				static double cumulative_time_normal = 0;
+				static double cumulative_time_to_cpu = 0;
+				static double cumulative_time_process_last = 0;
 
 				// Handle bots
 				{
@@ -3327,7 +3357,6 @@ int CServer::Run()
 					int map_width = gamelayer->m_Width;
 					int map_height = gamelayer->m_Height;
 					//printf("6\n");
-					int update_tick = 1000;
 					static int dies = 0;
 					static int moved_distance = 0;
 					static float cumulative_reward = 0;
@@ -3370,7 +3399,7 @@ int CServer::Run()
 								finished = true;
 							}
 
-							if(bot_character->m_FreezeTime || bot_character->Core()->m_IsInFreeze)
+							if(bot_character->m_FreezeTime || bot_character->Core()->m_IsInFreeze || pTiles[bot_block_index].m_Index == 9)
 							{
 								freezed = true;
 							}
@@ -3411,6 +3440,9 @@ int CServer::Run()
 							vBotsLastCheckPoint[i] = bot_character->m_PrevPos = bot_character->m_Pos = bot_character->Core()->m_Pos = vSpawnPoints[iSpawnPoint];
 							bot_character->Core()->m_Vel = vec2(2.f * random_float() - 1.f, 2.f * random_float() - 1.f);
 							vBotsCumulativeRewards[i] = 0;
+							auto spawn_point_pos = std::pair<int, int>((int)vSpawnPoints[iSpawnPoint].y / 32, (int)vSpawnPoints[iSpawnPoint].x / 32);
+							vBotsPath[i] = astar.findPath(spawn_point_pos, 30);
+							vBotBestDistance[i] = {astar.distanceToGoal(spawn_point_pos), m_CurrentGameTick};
 							//bot_character->Core()->m_Pos.x = 3.f * 32.f + random_float() * 4.f * 32.f;
 						}
 						
@@ -3428,7 +3460,6 @@ int CServer::Run()
 							if(died)
 							{
 								reward += die_reward; // 1000 500 348 * 32;
-								vBotsPath[i] = astar.findPath(std::pair<int, int>(bot_block_pos_y, bot_block_pos_x), 30);
 							}
 							/*else if(bot_character->m_Pos.x - vBotsSpawnPos[i].x >= 50.f * 32.f)
 							{
@@ -3438,7 +3469,6 @@ int CServer::Run()
 							else if(finished)
 							{
 								reward += finish_reward; // 348 * 32;
-								vBotsPath[i] = astar.findPath(std::pair<int, int>(bot_block_pos_y, bot_block_pos_x), 30);
 							}
 							//else if(bot_character->IsGrounded())
 							//{
@@ -3459,10 +3489,19 @@ int CServer::Run()
 								{
 									int prev_dist = astar.distanceToGoal(bot_last_block_pos_y, bot_last_block_pos_x);
 									vBotsPath[i] = astar.findPath(std::pair<int, int>(bot_block_pos_y, bot_block_pos_x), 30);
-									int path_dist_diff = prev_dist - astar.distanceToGoal(bot_block_pos_y, bot_block_pos_x);
+									int current_dist = astar.distanceToGoal(bot_block_pos_y, bot_block_pos_x);
+									int path_dist_diff = prev_dist - current_dist;
 									reward += path_dist_diff;
 									moved_distance += path_dist_diff;
+									if(current_dist > vBotBestDistance[i].first)
+									{
+										vBotBestDistance[i] = {current_dist, m_CurrentGameTick};
+									}
+
 								}
+
+								auto long_stay_penalty = -0.0003f * (m_CurrentGameTick - vBotBestDistance[i].second);
+
 								//cout << reward << endl;
 
 								/*if(reward < 0)
@@ -3475,8 +3514,8 @@ int CServer::Run()
 									reward -= 32;
 								}*/
 
-								// Encourage to run right faster
-								reward += step_reward; // 5
+								// Encourage to run faster
+								reward += step_reward; // step_reward
 
 								/*if(bot_character->m_Pos.x < 10.f * 32.f && reward <= 0)
 								{
@@ -3526,7 +3565,8 @@ int CServer::Run()
 					{
 						//decide_time = time_get_impl();
 						//printf("UPDATING\n");
-						float average = std::accumulate(rewards.begin(), rewards.end(), 0.0f) / (float)rewards.size();
+						float avg_reward = cumulative_reward / (float)(dies + count_bots);
+						float avg_dist = ((float)moved_distance / (float)(dies + count_bots));
 						rewards.clear();
 
 						if(m_CurrentGameTick % 20000 == 0)
@@ -3594,7 +3634,7 @@ int CServer::Run()
 						{
 							demo_recorder->Stop();
 							char aNewFilename[IO_MAX_PATH_LENGTH];
-							str_format(aNewFilename, sizeof(aNewFilename), "average_%f_%s_%llu.demo", average, m_aCurrentMap, time_get());
+							str_format(aNewFilename, sizeof(aNewFilename), "average_dist_%.2f_rew_%.2f_%s_%llu.demo", avg_dist, avg_reward, m_aCurrentMap, time_get_impl());
 							path_demo = "train/" + dir_name + "/demos/" + aNewFilename;
 							Storage()->RenameFile(demo_recorder->GetCurrentFilename(), path_demo.c_str(), IStorage::TYPE_ABSOLUTE);
 						}
@@ -3604,9 +3644,9 @@ int CServer::Run()
 							model_manager.Save("train\\" + dir_name + "\\models\\last");
 						}
 						//printf("222\n");
-						if(average > best_average)
+						if(avg_dist > best_average)
 						{
-							best_average = average;
+							best_average = avg_dist;
 							model_manager.Save("train\\" + dir_name + "\\models\\best"); // best" + to_string(average)
 							
 							/*namespace fs = std::filesystem;
@@ -3631,12 +3671,40 @@ int CServer::Run()
 						//printf("start_u\n");
 						//int64_t update_time = time_get_impl();
 						double avg_loss = 0;
-						model_manager.Update(avg_loss);
+						model_manager.Update(avg_dist, avg_loss);
 						//cout << "Time update: " << (float)(time_get_impl() - decide_time) / (float)time_freq() << endl;
-						logger << m_CurrentGameTick / 1000 << "," << cumulative_reward / (float)(dies + count_bots) << "," << ticks_per_second << "," << dies << "," << ((float)moved_distance / (float)(dies + count_bots)) << endl;
-						cout << "Avg. reward: " << cumulative_reward / (float)(dies + count_bots) << " TPS: " << ticks_per_second << " Avg. Training Loss: " << avg_loss
-						     << " Dies: " << dies << " Avg. distance: " << ((float)moved_distance / (float)(dies + count_bots)) << endl;
-						dies = moved_distance = cumulative_reward = 0;
+						logger << m_CurrentGameTick / update_tick
+						       << "," << avg_reward
+						       << "," << ticks_per_second
+						       << "," << dies
+						       << "," << avg_dist
+						       << "," << avg_loss
+						       << "," << model_manager.GetCurrentLearningRate()
+						       << "," << (float)time_get_impl() / (float)time_freq()
+						       << "," << (cumulative_time_to_decide / (float)update_tick)
+						       << "," << (cumulative_time_to_tick / (float)update_tick)
+						       << "," << (cumulative_time_rest / (float)update_tick)
+						       << "," << (cumulative_time_pre_forward / (float)update_tick)
+						       << "," << (cumulative_time_forward / (float)update_tick)
+						       << "," << (cumulative_time_normal / (float)update_tick)
+						       << "," << (cumulative_time_to_cpu / (float)update_tick)
+						       << "," << (cumulative_time_process_last / (float)update_tick)
+							<< endl;
+						cout << "Avg. reward: " << avg_reward << " TPS: " << ticks_per_second << " Avg. Training Loss: " << avg_loss
+						     << " Dies: " << dies << " Avg. distance: " << avg_dist << endl;
+						dies \
+							= moved_distance \
+							= cumulative_reward \
+							= cumulative_time_to_decide \
+							= cumulative_time_to_tick \
+							= cumulative_time_rest \
+							= cumulative_time_pre_forward \
+							= cumulative_time_forward \
+							= cumulative_time_normal \
+							= cumulative_time_normal \
+							= cumulative_time_to_cpu \
+							= cumulative_time_process_last \
+							= 0;
 						//cout << "Time to update: " << (float)(time_get_impl() - update_time) / (float)time_freq() << endl;
 						//printf("end\n");
 						if(m_CurrentGameTick % 20000 == 0)
@@ -3644,8 +3712,9 @@ int CServer::Run()
 							char aFilename[IO_MAX_PATH_LENGTH];
 							str_format(aFilename, sizeof(aFilename), "%s_%d_%llu.demo", m_aCurrentMap, m_NetServer.Address().port, time_get());
 							path_demo = "train\\" + dir_name + "\\demos\\" + aFilename;
-							int ret = demo_recorder->Start(Storage(), m_pConsole, path_demo.c_str(), GameServer()->NetVersion(), m_aCurrentMap, &m_aCurrentMapSha256[MAP_TYPE_SIX], m_aCurrentMapCrc[MAP_TYPE_SIX], "server", m_aCurrentMapSize[MAP_TYPE_SIX], m_apCurrentMapData[MAP_TYPE_SIX]);
+							//int ret = demo_recorder->Start(Storage(), m_pConsole, path_demo.c_str(), GameServer()->NetVersion(), m_aCurrentMap, &m_aCurrentMapSha256[MAP_TYPE_SIX], m_aCurrentMapCrc[MAP_TYPE_SIX], "server", m_aCurrentMapSize[MAP_TYPE_SIX], m_apCurrentMapData[MAP_TYPE_SIX]);
 						}
+						decide_time = std::chrono::high_resolution_clock::now();
 					}
 					//printf("12\n");
 					// apply new input
@@ -3662,7 +3731,7 @@ int CServer::Run()
 						auto bot_character_core = bot_character->Core();
 						// auto bot_2_character = gamecontext->GetPlayerChar(bot_2->GetCID());
 						//printf("HAHHA3.3\n");
-						if(m_CurrentGameTick != 0 && m_CurrentGameTick % 1000 == 0)
+						if(m_CurrentGameTick != 0 && m_CurrentGameTick % update_tick == 0)
 						{
 							// Add to cumulative spawn distance vector
 							//int iOldSpawnPoint = vBotsSpawnPos[i];
@@ -3683,6 +3752,9 @@ int CServer::Run()
 							vBotsLastCheckPoint[i] = bot_character->m_PrevPos = bot_character->m_Pos = bot_character_core->m_Pos = vSpawnPoints[iSpawnPoint];
 							bot_character_core->m_Vel = vec2(2.f * random_float() - 1.f, 2.f * random_float() - 1.f);
 							vBotsCumulativeRewards[i] = 0;
+							auto spawn_point_pos = std::pair<int, int>((int)vSpawnPoints[iSpawnPoint].y / 32, (int)vSpawnPoints[iSpawnPoint].x / 32);
+							vBotBestDistance[i] = {astar.distanceToGoal(spawn_point_pos), m_CurrentGameTick};
+							vBotsPath[i] = astar.findPath(spawn_point_pos, 30);
 							// bot_2->KillCharacter();
 							// bot_2->TryRespawn();
 							//bot_character->Core()->m_Pos.x = 3.f * 32.f + random_float() * 4.f * 32.f;
@@ -3821,9 +3893,10 @@ int CServer::Run()
 								switch(pTiles[Index].m_Index)
 								{
 								case 1:
-								case 2:
-								case 3:
 									input_blocks->blocks[block_count] = pTiles[Index].m_Index;
+									break;
+								case 9:
+									input_blocks->blocks[block_count] = 2;
 									break;
 								default:
 									input_blocks->blocks[block_count] = 0;
@@ -3920,13 +3993,25 @@ int CServer::Run()
 				}
 				//printf("13\n");
 				started = true;
-				auto now = time_get_impl();
-				//cout << "Time rest: " << (float)(now - decide_time) / (float)time_freq() << endl;
-				decide_time = time_get_impl();
-				vOutputs = model_manager.Decide(vInputInputs, vInputBlocks);
-				now = time_get_impl();
-				//cout << "Time to decide: " << (float)(now - decide_time) / (float)time_freq() << endl;
-				decide_time = time_get_impl();
+				auto now = std::chrono::high_resolution_clock::now();
+				cumulative_time_rest += std::chrono::duration_cast<std::chrono::duration<float>>(now - decide_time).count() * 1000.f;
+				//cout << "Time rest: " << std::chrono::duration_cast<std::chrono::duration<float>>(now - decide_time).count() << endl;
+				double time_pre_forward = 0;
+				double time_forward = 0;
+				double time_normal = 0;
+				double time_to_cpu = 0;
+				double time_process_last = 0;
+				decide_time = std::chrono::high_resolution_clock::now();
+				vOutputs = model_manager.Decide(vInputInputs, vInputBlocks, time_pre_forward, time_forward, time_normal, time_to_cpu, time_process_last);
+				now = std::chrono::high_resolution_clock::now();
+				cumulative_time_to_decide += std::chrono::duration_cast<std::chrono::duration<float>>(now - decide_time).count() * 1000.f;
+				cumulative_time_pre_forward += time_pre_forward;
+				cumulative_time_forward += time_forward;
+				cumulative_time_normal += time_normal;
+				cumulative_time_to_cpu += time_to_cpu;
+				cumulative_time_process_last += time_process_last;
+				//cout << "Time to decide: " << std::chrono::duration_cast<std::chrono::duration<float>>(now - decide_time).count() << endl;
+				decide_time = std::chrono::high_resolution_clock::now();
 				//printf("KEK\n");
 				//printf("14\n");
 				for(int c = 0; c < MAX_CLIENTS; c++)
@@ -4180,9 +4265,10 @@ int CServer::Run()
 					break;
 				}
 				//printf("21\n");
-				now = time_get_impl();
+				now = std::chrono::high_resolution_clock::now();
+				cumulative_time_to_tick += std::chrono::duration_cast<std::chrono::duration<float>>(now - decide_time).count() * 1000.f;
 				//cout << "Time to tick: " << (float)(now - decide_time) / (float)time_freq() << endl;
-				decide_time = time_get_impl();
+				decide_time = std::chrono::high_resolution_clock::now();
 
 				/*if(m_CurrentGameTick == 1000)
 				{

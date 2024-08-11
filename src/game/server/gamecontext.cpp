@@ -856,7 +856,10 @@ void CGameContext::OnTick()
 
 	// copy tuning
 	m_World.m_Core.m_aTuning[0] = m_Tuning;
+	//decide_time = time_get_impl();
+
 	m_World.Tick();
+	//printf("2: %f\n", (float)(time_get_impl() - decide_time) / (float)time_freq());
 
 	//if(world.paused) // make sure that the game object always updates
 	m_pController->Tick();

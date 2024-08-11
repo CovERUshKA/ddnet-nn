@@ -11,18 +11,20 @@
 // Network model for Proximal Policy Optimization on Incy Wincy.
 struct ActorCriticImpl : public torch::nn::Module 
 {
+	int64_t n_in, n_out, used_presamples;
     // Actor.
 	//torch::nn::Linear a_lin1_, a_lin2_, /*a_lin3_,*/ a_lin4_;
     torch::nn::Sequential actor_network;
     torch::Tensor mu_;
-    torch::Tensor log_std_;
+    torch::Tensor log_std_, normal_presampled;
 
     // Critic.
     //torch::nn::Linear c_lin1_, c_lin2_, /*c_lin3_,*/ c_lin4_, c_val_;
     torch::nn::Sequential critic_network;
 
-    ActorCriticImpl(int64_t n_in, int64_t n_out, double std)
-        : // Actor.
+    ActorCriticImpl(int64_t n_in, int64_t n_out, double std) :
+	    n_in(n_in), n_out(n_out),
+		// Actor.
        //   a_lin1_(torch::nn::Linear(n_in, 16)),
        //   a_lin2_(torch::nn::Linear(16, 32)),
 	      ////a_lin3_(torch::nn::Linear(16, 16)),
@@ -129,11 +131,11 @@ struct ActorCriticImpl : public torch::nn::Module
 		    //auto decide_time = std::chrono::high_resolution_clock::now();
 		    //log_std = log_std_cpu.to(torch::kCPU);
 		    //printf("1\n");
-		    x = x.to(torch::kCPU, true);
+		    //x = x.to(torch::kCPU, true);
 
-		    auto std = log_std_.to(torch::kCPU, true); // .to(torch::kCPU)
-		    at::cuda::stream_synchronize(at::cuda::getCurrentCUDAStream());
-		    std = std.exp().expand_as(x);
+		    //auto std = log_std_.to(torch::kCPU, true); // .to(torch::kCPU)
+		    //at::cuda::stream_synchronize(at::cuda::getCurrentCUDAStream());
+		    //auto std = log_std_.exp().expand_as(x);
 		    //printf("2\n");
 		    //std::cout << std << std::endl;
 
@@ -176,16 +178,17 @@ struct ActorCriticImpl : public torch::nn::Module
 		    torch::Tensor action;
 		    try
 		    {
-				action = at::normal(x, std);
+			    action = x + normal_presampled[used_presamples]; // at::normal(x, std);
+			    used_presamples += 1;
 		    }
 		    catch(const std::exception &e)
 		    {
 			    std::cout << "KEK: " << e.what() << std::endl;
 			    std::cout << log_std_ << std::endl;
-			    std::cout << std << std::endl;
+			    /*std::cout << std << std::endl;
 			    std::cout << std.device() << std::endl;
 			    std::cout << std.dtype() << std::endl;
-			    std::cout << std.sizes() << std::endl;
+			    std::cout << std.sizes() << std::endl;*/
 			    exit(1);
 		    }
 		    //std::cout << "Contains after: " << std[0][0].item<float>() << std::endl;
@@ -214,6 +217,19 @@ struct ActorCriticImpl : public torch::nn::Module
         {
             p.normal_(mu,std);
         }         
+    }
+
+	/*void log_to_cpu()
+    {
+		log_std_cpu = log_std_.to(torch::kCPU, true);
+	    at::cuda::stream_synchronize(at::cuda::getCurrentCUDAStream());
+    }*/
+
+	void presample_normal(int count_samples, int count_players)
+    {
+		static torch::Tensor zero_mean = torch::zeros({count_samples, count_players, n_out}, torch::kCUDA);
+	    normal_presampled = at::normal(zero_mean, log_std_.exp().expand_as(zero_mean));
+	    used_presamples = 0;
     }
 
     auto entropy() -> torch::Tensor

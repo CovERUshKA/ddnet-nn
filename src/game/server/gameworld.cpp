@@ -262,13 +262,23 @@ void CGameWorld::UpdatePlayerMaps()
 
 void CGameWorld::Tick()
 {
+	//int64_t decide_time = time_get_impl();
+
 	if(m_ResetRequested)
 		Reset();
 
+	//printf("1: %f\n", (float)(time_get_impl() - decide_time) / (float)time_freq());
+	//decide_time = time_get_impl();
+
+
 	if(!m_Paused)
 	{
+
 		if(GameServer()->m_pController->IsForceBalanced())
 			GameServer()->SendChat(-1, CGameContext::CHAT_ALL, "Teams have been balanced");
+		//printf("2: %f\n", (float)(time_get_impl() - decide_time) / (float)time_freq());
+		//decide_time = time_get_impl();
+		//float summe = 0;
 
 		// update all objects
 		for(int i = 0; i < NUM_ENTTYPES; i++)
@@ -285,6 +295,7 @@ void CGameWorld::Tick()
 					pEnt = m_pNextTraverseEntity;
 				}
 			}
+			//decide_time = time_get_impl();
 
 			auto *pEnt = m_apFirstEntityTypes[i];
 			for(; pEnt;)
@@ -293,7 +304,10 @@ void CGameWorld::Tick()
 				pEnt->Tick();
 				pEnt = m_pNextTraverseEntity;
 			}
+			//summe += time_get_impl() - decide_time;
 		}
+		//printf("3: %f\n", summe / (float)time_freq());
+		//decide_time = time_get_impl();
 
 		for(auto *pEnt : m_apFirstEntityTypes)
 			for(; pEnt;)
@@ -302,6 +316,8 @@ void CGameWorld::Tick()
 				pEnt->TickDeferred();
 				pEnt = m_pNextTraverseEntity;
 			}
+		//printf("4: %f\n", (float)(time_get_impl() - decide_time) / (float)time_freq());
+		//decide_time = time_get_impl();
 	}
 	else
 	{
@@ -316,9 +332,12 @@ void CGameWorld::Tick()
 	}
 
 	RemoveEntities();
+	//printf("5: %f\n", (float)(time_get_impl() - decide_time) / (float)time_freq());
+	//decide_time = time_get_impl();
 
-	UpdatePlayerMaps();
-
+	//UpdatePlayerMaps();
+	//printf("6: %f\n", (float)(time_get_impl() - decide_time) / (float)time_freq());
+	//decide_time = time_get_impl();
 	// find the characters' strong/weak id
 	int StrongWeakID = 0;
 	for(CCharacter *pChar = (CCharacter *)FindFirst(ENTTYPE_CHARACTER); pChar; pChar = (CCharacter *)pChar->TypeNext())
@@ -326,6 +345,8 @@ void CGameWorld::Tick()
 		pChar->m_StrongWeakID = StrongWeakID;
 		StrongWeakID++;
 	}
+	//printf("7: %f\n", (float)(time_get_impl() - decide_time) / (float)time_freq());
+	//decide_time = time_get_impl();
 }
 
 void CGameWorld::SwapClients(int Client1, int Client2)
