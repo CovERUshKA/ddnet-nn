@@ -4,7 +4,7 @@ To compile you would need to install libtorch with cuda support.
 
 Steps to build on Windows:
 1) Install CUDA the same version that libtorch with cuda support is built for.
-2) Install NVTX from CUDA 11.8.
+2) Install Nsight NVTX from CUDA 11.8.
 3) Download libtorch with cuda support and add it to ddnet-libs
 4) Call cmake so it will generate files to build
 5) Link dependencies in Visual Studio for DDNet-Server:
