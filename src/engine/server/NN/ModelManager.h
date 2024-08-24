@@ -37,7 +37,7 @@ struct ModelInputInputs
 	// Old hook angle according to tee
 	vec2 hook_old_angle;
 
-	// Path of the tee
+	// Path towards the finish containing 30 steps(blocks)
 	vec2 path[30]; 
 };
 
@@ -81,9 +81,11 @@ struct ModelManager
 	void Reward(float reward, bool done);
 	void SaveReplays();
 
-	void Update(double avg_reward, double &avg_training_loss);
+	void Update(double avg_reward, double &avg_training_loss, double &avg_actor_loss, double &avg_critic_loss);
 
 	void Save(std::string filename);
+
+	bool IsTraining();
 
 	size_t GetCountOfReplays();
 	// Return starting learning rate

@@ -30,7 +30,7 @@ public:
 	static auto Initilize(size_t batch_size, size_t count_players) -> void;
     static auto update(ActorCritic& ac,
 	    std::shared_ptr<torch::optim::Adam> &opt, 
-                       uint steps, uint epochs, uint mini_batch_size, double beta, float gamma, float lambda, c10::DeviceType device, double clip_param = .2) -> double;
+                       uint steps, uint epochs, uint mini_batch_size, double beta, float gamma, float lambda, c10::DeviceType device, double &avg_training_loss, double &avg_actor_loss, double &avg_critic_loss, double clip_param = .2) -> void;
     static auto save_replay(torch::Tensor &state,
 	    torch::Tensor &action,
 	    torch::Tensor &log_prob,
@@ -180,10 +180,10 @@ public:
 			//  advantages_concat = torch::cat(rewards, 1);
 			//printf("1\n");
 
-			states_concatenated_reshaped = states_concatenated.reshape({states_concatenated.sizes()[0] * states_concatenated.sizes()[1], states_concatenated.sizes()[2]});
-			actions_concat_reshaped = actions_concat.reshape({actions_concat.sizes()[0] * actions_concat.sizes()[1], actions_concat.sizes()[2]});
+			states_concatenated_reshaped = states_concatenated.view({states_concatenated.sizes()[0] * states_concatenated.sizes()[1], states_concatenated.sizes()[2]});
+			actions_concat_reshaped = actions_concat.view({actions_concat.sizes()[0] * actions_concat.sizes()[1], actions_concat.sizes()[2]});
 			//printf("1\n");
-			log_probs_concat_reshaped = log_probs_concat.reshape({log_probs_concat.sizes()[0] * log_probs_concat.sizes()[1], log_probs_concat.sizes()[2]});
+			log_probs_concat_reshaped = log_probs_concat.view({log_probs_concat.sizes()[0] * log_probs_concat.sizes()[1], log_probs_concat.sizes()[2]});
 			//printf("1\n");
 			// std::cout << "Rewards size: " << rewards.sizes() << " " << rewards.size(0) << std::endl;
 			//rewards_concat = rewards_concat.reshape({rewards_concat.numel(), 1});
@@ -338,9 +338,9 @@ torch::Tensor calculate_returns(std::vector<float> &rewards, std::vector<bool> &
 	{
 		float delta = 0;
 		if(i == rewards.size() - 1)
-			delta = rewards[i] + gamma * vValues[i] * (1 - dones[i]) - vValues[i];
+			delta = (rewards[i] / 200.f) + gamma * vValues[i] * (1 - dones[i]) - vValues[i];
 		else
-			delta = rewards[i] + gamma * vValues[i + 1] * (1 - dones[i]) - vValues[i];
+			delta = (rewards[i] / 200.f) + gamma * vValues[i + 1] * (1 - dones[i]) - vValues[i];
 
 		gae = delta + gamma * lambda * (1 - dones[i]) * gae;
 		// printf("FINNNN1.4\n");
@@ -455,9 +455,11 @@ auto PPO::count_of_replays() -> size_t
 
 auto PPO::update(ActorCritic &ac,
 	std::shared_ptr<torch::optim::Adam> &opt,
-	uint steps, uint epochs, uint mini_batch_size, double beta, float gamma, float lambda, c10::DeviceType device, double clip_param) -> double
+	uint steps, uint epochs, uint mini_batch_size, double beta, float gamma, float lambda, c10::DeviceType device, double &avg_training_loss, double &avg_actor_loss, double &avg_critic_loss, double clip_param) -> void
 {
 	torch::Tensor total_loss_tensor = torch::zeros({}, torch::kCUDA); // Initialize tensor to accumulate loss
+	torch::Tensor total_actor_loss_tensor = torch::zeros({}, torch::kCUDA); // Initialize tensor to accumulate loss
+	torch::Tensor total_critic_loss_tensor = torch::zeros({}, torch::kCUDA); // Initialize tensor to accumulate loss
 
 	{
 		std::deque<torch::Tensor> states, actions, values, log_probs;
@@ -466,7 +468,7 @@ auto PPO::update(ActorCritic &ac,
 		// Wait for all log probs to come to cpu
 		at::cuda::getCurrentCUDAStream().synchronize();
 		//at::cuda::stream_synchronize(at::cuda::getCurrentCUDAStream());
-
+		//printf("1\n");
 		//printf("1\n");
 		for(size_t i = 0; i < replay_buffer->capacity() / mini_batch_size /*&&  i < epochs*/; i++)
 		{
@@ -486,7 +488,7 @@ auto PPO::update(ActorCritic &ac,
 				torch::Tensor cpy_inputs = state.index({"...", torch::indexing::Slice(0, 78)});
 				//printf("UPDATING0.3\n");
 				//std::cout << state.sizes() << std::endl;
-				torch::Tensor cpy_blocks = torch::one_hot(state.index({"...", torch::indexing::Slice(78, 1167)}).to(torch::kInt64), 3).to(torch::kF32).view({state.size(0), -1});
+				torch::Tensor cpy_blocks = torch::one_hot(state.index({"...", torch::indexing::Slice(78, 1167)}).to(torch::kInt64), 3).to(torch::kF32).view({(long long)mini_batch_size, -1});
 				//printf("UPDATING0.4\n");
 				auto cpy_state_forward = torch::cat({cpy_inputs, cpy_blocks}, 1);
 				//printf("UPDATING0.5\n");
@@ -508,6 +510,7 @@ auto PPO::update(ActorCritic &ac,
 		//std::cout << mini_batch_size << std::endl;
 		//std::cout << replay_buffer->size() / mini_batch_size << std::endl;
 		//printf("2\n");
+		//Sleep(5000);
 		replay_buffer->clear();
 		
 		//printf("CHECK\n");
@@ -522,6 +525,7 @@ auto PPO::update(ActorCritic &ac,
 		{
 			for(size_t i = 0; i < replay_buffer->capacity() / mini_batch_size; i++)
 			{
+				//c10::cuda::CUDACachingAllocator::emptyCache();
 				//auto decide_time = std::chrono::high_resolution_clock::now();
 
 				torch::Tensor states_cpy = states[i];
@@ -557,7 +561,7 @@ auto PPO::update(ActorCritic &ac,
 				
 				torch::Tensor cpy_inputs = cpy_sta.index({"...", torch::indexing::Slice(0, 78)});
 				// printf("UPDATING0.3\n");
-				torch::Tensor cpy_blocks = torch::one_hot(cpy_sta.index({"...", torch::indexing::Slice(78, 1167)}).to(torch::kInt64), 3).to(torch::kF32).view({cpy_sta.size(0), -1});
+				torch::Tensor cpy_blocks = torch::one_hot(cpy_sta.index({"...", torch::indexing::Slice(78, 1167)}).to(torch::kInt64), 3).to(torch::kF32).view({(long long)mini_batch_size, -1});
 				// printf("UPDATING0.4\n");
 				cpy_sta = torch::cat({cpy_inputs, cpy_blocks}, 1);
 
@@ -573,13 +577,15 @@ auto PPO::update(ActorCritic &ac,
 				// printf("UPDATING0.1.3.2\n");
 				// std::cout << dones_cpy.sizes() << std::endl;
 				// std::cout << dones_cpy << std::endl;
-				
+				//printf("3\n");
+				//Sleep(7000);
+				//std::cout << cpy_values << std::endl;
 				auto returnsee = calculate_returns(rewards[i], dones[i], cpy_values, gamma, lambda);
 				//auto now = std::chrono::high_resolution_clock::now();
 				//std::cout << "Time to prepare: " << (float)(std::chrono::duration_cast<std::chrono::milliseconds>(now - decide_time).count()) << std::endl;
 				
 				// std::cout << returnsee.sizes() << std::endl;
-				// std::cout << returnsee << std::endl;
+				//std::cout << returnsee << std::endl;
 				// auto decide_time = std::chrono::high_resolution_clock::now();
 
 				torch::Tensor cpy_ret = returnsee; // normalize_rewards(returnsee);
@@ -603,6 +609,8 @@ auto PPO::update(ActorCritic &ac,
 
 				// printf("UPDATING1.1\n");
 				auto action = ac->actor_forward(cpy_sta);
+				//printf("4\n");
+				//Sleep(7000);
 				// printf("33.0\n");
 				// std::cout << action.sizes() << std::endl;
 				// std::cout << cpy_act.sizes() << std::endl;
@@ -625,8 +633,11 @@ auto PPO::update(ActorCritic &ac,
 				// printf("UPDATING1.5.1\n");
 				auto surr2 = torch::clamp(ratio, 1. - clip_param, 1. + clip_param) * cpy_adv;
 				// printf("UPDATING1.6\n");
-
+				//printf("4.9\n");
+				//Sleep(7000);
 				auto val = ac->critic_forward(cpy_sta);
+				//printf("5\n");
+				//Sleep(7000);
 				auto actor_loss = -torch::min(surr1, surr2).mean();
 				// printf("UPDATING1.7\n");
 				auto critic_loss = torch::nn::functional::mse_loss(val, cpy_ret); //(cpy_ret - val).pow(2).mean();
@@ -653,7 +664,11 @@ auto PPO::update(ActorCritic &ac,
 
 				// printf("UPDATING1.12\n");
 				// total_loss += loss.item<double>();
+				total_actor_loss_tensor += actor_loss;
+				total_critic_loss_tensor += critic_loss;
 				total_loss_tensor += loss;
+				//printf("Pre next\n");
+				//Sleep(5000);
 
 				// printf("Chillin\n");
 				// Sleep(10000);
@@ -673,12 +688,14 @@ auto PPO::update(ActorCritic &ac,
 	double avg_loss = 0;
 	//auto decide_time = std::chrono::high_resolution_clock::now();
 
-	avg_loss = total_loss_tensor.item<double>() / (epochs * replay_buffer->capacity() / mini_batch_size);
+	avg_training_loss = total_loss_tensor.item<double>() / (epochs * replay_buffer->capacity() / mini_batch_size);
+	avg_actor_loss = total_actor_loss_tensor.item<double>() / (epochs * replay_buffer->capacity() / mini_batch_size);
+	avg_critic_loss = total_critic_loss_tensor.item<double>() / (epochs * replay_buffer->capacity() / mini_batch_size);
 	//auto now = std::chrono::high_resolution_clock::now();
 	//std::cout << "Time to calculate loss: " << (float)(std::chrono::duration_cast<std::chrono::milliseconds>(now - decide_time).count()) << std::endl;
 	//std::cout << "Average training Loss: " << avg_loss << std::endl;
 
 	//c10::cuda::CUDACachingAllocator::emptyCache();
 
-	return avg_loss;
+	return;
 }

@@ -11,9 +11,14 @@
 #include <torch/optim/schedulers/reduce_on_plateau_scheduler.h>
 
 int64_t n_in = 3345; // 78 + 1089 * 3
+int64_t n_scalar_in = 78;
+int64_t n_grid_channels = 3;
 int64_t n_out = 9;
 double stdrt = 2e-2;
-double learning_rate = 5e-5; // Default: 1e-3
+double learning_rate = 3e-5; // Default: 5e-5
+double actor_learning_rate = 5e-5; // Default: 5e-5
+double critic_learning_rate = 2e-4; // Default: 1e-4
+//double weight_decay = 0.0001;
 
 int64_t mini_batch_size = 8000; // 4096, 8192, 16384, 32768
 int64_t ppo_epochs = 2; // Default: 4
@@ -24,6 +29,8 @@ float lambda = 0.95f;
 
 ActorCritic ac(n_in, n_out, stdrt);
 std::shared_ptr<torch::optim::Adam> opt; //(ac->parameters(), 1e-2);
+//std::shared_ptr<torch::optim::Adam> actor_opt;
+//std::shared_ptr<torch::optim::Adam> ocritic;
 std::shared_ptr<torch::optim::ReduceLROnPlateauScheduler> scheduler;
 
 VT states;
@@ -63,7 +70,7 @@ void generate_random_hyperparameters()
 	std::uniform_int_distribution<> epochs_dist(0, epochs_set.size() - 1); // Epochs range
 	std::uniform_int_distribution<> mini_batch_size_dist(0, mini_batch_sizes_set.size() - 1); // Batch size range
 
-	learning_rate = lr_set[lr_dist(gen)];
+	//learning_rate = lr_set[lr_dist(gen)];
 	//gamma = gamma_set[gamma_dist(gen)];
 	//dbeta = beta_set[beta_dist(gen)];
 	//clip_param = clip_set[clip_dist(gen)];
@@ -84,22 +91,83 @@ ModelManager::ModelManager(size_t batch_size, size_t count_players) :
 	ac->to(precision);
 	//ac->normal(0., stdrt);
 	//ac->eval();
-	//learning_rate = 2e-5;
-	opt = std::make_shared<torch::optim::Adam>(ac->parameters(), learning_rate);
-	//torch::load(ac, "train\\1723320877699\\models\\best_model.pt");
-	//torch::load(*opt, "train\\1723320877699\\models\\best_optimizer.pt");
-	scheduler = std::make_shared<torch::optim::ReduceLROnPlateauScheduler>(*opt, /* mode */ torch::optim::ReduceLROnPlateauScheduler::max, /* factor */ 0.5, /* patience */ 20);
+	//learning_rate = 1e-6;
+	//torch::optim::AdamOptions opts(learning_rate);
+	//opts.weight_decay(weight_decay);
+	//std::vector<torch::optim::AdamOptions> options = {torch::optim::AdamOptions(actor_learning_rate), torch::optim::AdamOptions(critic_learning_rate)};
+	//std::vector<torch::optim::OptimizerParamGroup> params;
+	// Create parameter groups
+	//printf("1\n");
+	//torch::optim::OptimizerOptions critic_options;
+	//critic_options.set_lr(critic_learning_rate);
+	//torch::optim::AdamOptions options;
+	//torch::optim::OptimizerParamGroup actor_group(ac->actor_network->parameters());
+	//torch::optim::OptimizerParamGroup critic_group(ac->critic_network->parameters());
+	//printf("1\n");
+	// Create the first parameter group with drive_db_
+	//std::vector<torch::Tensor> params1 = {drive_db_};
+
+	// Initialize the Adam optimizer with the parameter group
+	std::vector<torch::optim::OptimizerParamGroup> param_groups;
+
+	param_groups.push_back(torch::optim::OptimizerParamGroup({ac->actor_network->parameters()},
+							std::make_unique<torch::optim::AdamOptions>(actor_learning_rate)));
+	param_groups.push_back(torch::optim::OptimizerParamGroup({ac->critic_network->parameters()},
+							std::make_unique<torch::optim::AdamOptions>(critic_learning_rate)));
+	param_groups.push_back(torch::optim::OptimizerParamGroup({ac->log_std_},
+		std::make_unique<torch::optim::AdamOptions>(actor_learning_rate)));
+
+	// Set different learning rates for each group
+	//static_cast<torch::optim::AdamOptions &>(actor_group.options()).lr(actor_learning_rate);
+	//actor_group.options().set_lr(actor_learning_rate);
+	//printf("1\n");
+	//static_cast<torch::optim::AdamOptions &>(critic_group.options()).lr(critic_learning_rate);
+	//critic_group.options().set_lr(critic_learning_rate);
+	//printf("1\n");
+
+	// Create a vector of parameter groups
+	//std::vector<torch::optim::OptimizerParamGroup> param_groups = {actor_group, critic_group};
+	//printf("1\n");
+
+	// Create the optimizer with parameter groups
+	/*torch::optim::Adam optimizer({actor_group,
+		critic_group});*/
+	/*params.push_back(ac->actor_network->parameters());
+	params.push_back(ac->critic_network->parameters());*/
+	//actor_opt = std::make_shared<torch::optim::Adam>(ac->actor_parameters(), actor_learning_rate);
+	//critic_opt = std::make_shared<torch::optim::Adam>(ac->critic_parameters(), critic_learning_rate);
+	//opt = std::make_shared<torch::optim::Adam>(ac->parameters(), learning_rate);
+	opt = std::make_shared<torch::optim::Adam>(param_groups);
+	//torch::load(ac, "train\\1724427150860\\models\\last_model.pt");
+	//torch::load(*opt, "train\\1724427150860\\models\\last_optimizer.pt");
+	//scheduler = std::make_shared<torch::optim::ReduceLROnPlateauScheduler>(*opt, /* mode */ torch::optim::ReduceLROnPlateauScheduler::max, /* factor */ 0.5, /* patience */ 20);
 	/*for(auto &param_group : opt->param_groups())
 	{
-		param_group.options().set_lr(learning_rate);
+		if(param_group.options().get_lr() == 5e-5)
+		{
+			printf("Setting\n");
+			param_group.options().set_lr(1e-5);
+			printf("Setted\n");
+		}
+
+		if(param_group.options().get_lr() == 1e-4)
+		{
+			printf("Setting\n");
+			param_group.options().set_lr(2e-5);
+			printf("Setted\n");
+		}
 	}*/
-	cout << "Learning rate: " << learning_rate << " Gamma: " << gamma << " Beta: " << dbeta << " clip_param: " << clip_param << " Epochs: " << ppo_epochs << " Mini batch size: " << mini_batch_size << endl;
 	//Sleep(7000);
 	ac->to(device);
-	ac->presample_normal(iReplaysPerBot, count_bots);
 	//Sleep(7000);
 	// opt(ac->parameters(), 1e-3);
-	PPO::Initilize(batch_size, count_bots);
+	//ac->eval();
+	if(ac->is_training())
+	{
+		PPO::Initilize(batch_size, count_bots);
+		ac->presample_normal(iReplaysPerBot, count_bots);
+		cout << "Learning rate: " << learning_rate << " Gamma: " << gamma << " Beta: " << dbeta << " clip_param: " << clip_param << " Epochs: " << ppo_epochs << " Mini batch size: " << mini_batch_size << endl;
+	}
 	//at::cuda::setCurrentCUDAStream(myStream);
 }
 
@@ -124,11 +192,9 @@ std::vector<ModelOutput> ModelManager::Decide(
 	//std::memcpy(state.data_ptr(), &(input), sizeof(input));
 	auto blocks_input_gpu = blocks_input_cpu.to(device, true);
 	auto state_inputs_gpu = state_inputs_cpu.to(device, true);
-
-	
 	
 	//printf("1.1\n");
-	auto one_hotted_blocks = torch::one_hot(blocks_input_gpu, 3);
+	auto one_hotted_blocks = torch::one_hot(blocks_input_gpu, n_grid_channels);
 	//printf("1.2\n");
 	one_hotted_blocks = one_hotted_blocks.to(precision);
 	//printf("1.3\n");
@@ -139,14 +205,14 @@ std::vector<ModelOutput> ModelManager::Decide(
 	//states.push_back(state);
 	//  Play.
 	//cout << state_forward.sizes() << endl;
-	at::cuda::getCurrentCUDAStream().synchronize();
+	//at::cuda::getCurrentCUDAStream().synchronize();
 
 	auto now = std::chrono::high_resolution_clock::now();
 	time_pre_forward = std::chrono::duration<double>(now - decide_time).count() * 1000.;
 	//std::cout << "Time to allocate and transfer: " << std::chrono::duration<double>(now - decide_time).count() << std::endl;
 	decide_time = std::chrono::high_resolution_clock::now();
 	auto av = ac->actor_forward(state_forward);
-	at::cuda::getCurrentCUDAStream().synchronize();
+	//at::cuda::getCurrentCUDAStream().synchronize();
 
 	now = std::chrono::high_resolution_clock::now();
 	time_forward = std::chrono::duration<double>(now - decide_time).count() * 1000.;
@@ -155,7 +221,7 @@ std::vector<ModelOutput> ModelManager::Decide(
 	//printf("2.1\n");
 
 	av = ac->normal_actor(av);
-	at::cuda::getCurrentCUDAStream().synchronize();
+	//at::cuda::getCurrentCUDAStream().synchronize();
 
 	now = std::chrono::high_resolution_clock::now();
 	time_normal = std::chrono::duration<double>(now - decide_time).count() * 1000.;
@@ -216,7 +282,7 @@ std::vector<ModelOutput> ModelManager::Decide(
 	//tValues = tValues.to(torch::kCPU);
 	//auto now = std::chrono::high_resolution_clock::now();
 	//std::cout << "Time to .to: " << std::chrono::duration<double>(now - decide_time).count() << std::endl;
-	at::cuda::getCurrentCUDAStream().synchronize();
+	//at::cuda::getCurrentCUDAStream().synchronize();
 	now = std::chrono::high_resolution_clock::now();
 	time_to_cpu = std::chrono::duration<double>(now - decide_time).count() * 1000.;
 	decide_time = std::chrono::high_resolution_clock::now();
@@ -515,7 +581,7 @@ void ModelManager::SaveReplays()
 	return;
 }
 
-void ModelManager::Update(double avg_reward, double& avg_training_loss)
+void ModelManager::Update(double avg_reward, double &avg_training_loss, double &avg_actor_loss, double &avg_critic_loss)
 {
 	// Update.
 	//printf("Updating the network.\n");
@@ -545,20 +611,20 @@ void ModelManager::Update(double avg_reward, double& avg_training_loss)
 	//printf("UPDATING111\n");
 	try
 	{
-		avg_training_loss = PPO::update(ac, opt, rewards.size(), ppo_epochs, mini_batch_size, dbeta, gamma, lambda, device, clip_param);
+		PPO::update(ac, opt, rewards.size(), ppo_epochs, mini_batch_size, dbeta, gamma, lambda, device, avg_training_loss, avg_actor_loss, avg_critic_loss, clip_param);
 	}
 	catch(const std::exception &e)
 	{
 		std::cout << "PPO::update crashed with reason: " << e.what() << std::endl;
 		exit(1);
 	}
-	scheduler->step(avg_reward);
+	//scheduler->step(avg_reward);
 	ac->presample_normal(iReplaysPerBot, count_bots);
-	for(auto &group : opt->param_groups())
+	/*for(auto &group : opt->param_groups())
 	{
 		auto lr = group.options().get_lr();
 		std::cout << "Current learning rate: " << lr << std::endl;
-	}
+	}*/
 	//printf("UPDATed\n");
 	//printf("4");
 	// c = 0;
@@ -601,4 +667,9 @@ int64_t ModelManager::GetMiniBatchSize()
 int64_t ModelManager::GetCountPPOEpochs()
 {
 	return ppo_epochs;
+}
+
+bool ModelManager::IsTraining()
+{
+	return ac->is_training();
 }

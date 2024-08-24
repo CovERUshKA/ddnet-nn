@@ -247,8 +247,8 @@ void CPlayer::Tick()
 				m_pCharacter = 0;
 			}
 		}
-		else if(m_Spawning && !m_WeakHookSpawn)
-			TryRespawn();
+		/*else if(m_Spawning && !m_WeakHookSpawn)
+			TryRespawn();*/
 	}
 	else
 	{
@@ -307,8 +307,8 @@ void CPlayer::PostPostTick()
 		if(!Server()->ClientIngame(m_ClientID))
 			return;
 
-	if(!GameServer()->m_World.m_Paused && !m_pCharacter && m_Spawning && m_WeakHookSpawn)
-		TryRespawn();
+	/*if(!GameServer()->m_World.m_Paused && !m_pCharacter && m_Spawning && m_WeakHookSpawn)
+		TryRespawn();*/
 }
 
 void CPlayer::Snap(int SnappingClient)

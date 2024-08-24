@@ -12,6 +12,7 @@
 struct ActorCriticImpl : public torch::nn::Module 
 {
 	int64_t n_in, n_out, used_presamples;
+
     // Actor.
 	//torch::nn::Linear a_lin1_, a_lin2_, /*a_lin3_,*/ a_lin4_;
     torch::nn::Sequential actor_network;
@@ -32,38 +33,64 @@ struct ActorCriticImpl : public torch::nn::Module
 	    actor_network(torch::nn::Sequential(
 		    torch::nn::Linear(n_in, 2048),
 		    torch::nn::ReLU(),
+			torch::nn::Linear(2048, 1024),
+		    torch::nn::ReLU(),
+		    //torch::nn::Dropout(0.2),
+		    torch::nn::Linear(1024, 512),
+		    torch::nn::ReLU(),
+		    // torch::nn::Dropout(0.2),
+		    torch::nn::Linear(512, 256),
+			torch::nn::ReLU(),
+		    //torch::nn::Dropout(0.2),
+		    torch::nn::Linear(256, 128),
+		    torch::nn::ReLU(),
+		    //torch::nn::Dropout(0.2),
+		    //torch::nn::Linear(1024, 1024),
+			//torch::nn::ReLU(),
+		    // torch::nn::Dropout(0.2),
+		    //torch::nn::Linear(1024, 1024),
+			//torch::nn::ReLU(),
+		    // torch::nn::Dropout(0.2),
+		    //torch::nn::Linear(1024, 1024),
+			//torch::nn::ReLU(),
+		    // torch::nn::Dropout(0.2),
+		    //torch::nn::Linear(256, 128),
+		    //torch::nn::ReLU(),
+		    torch::nn::Linear(128, n_out)/*,
+			torch::nn::Tanh()*/)),
+          mu_(torch::full(n_out, 0.)),
+          log_std_(torch::full(n_out, std)),
+	    critic_network(torch::nn::Sequential(
+			torch::nn::Linear(n_in, 2048),
+		    torch::nn::ReLU(),
+			//torch::nn::Dropout(0.2),
 		    torch::nn::Linear(2048, 1024),
 		    torch::nn::ReLU(),
 		    //torch::nn::Dropout(0.2),
 		    torch::nn::Linear(1024, 512),
 		    torch::nn::ReLU(),
-		    //torch::nn::Dropout(0.2),
+			//torch::nn::Dropout(0.2),
 		    torch::nn::Linear(512, 256),
-		    torch::nn::ReLU(),
+			torch::nn::ReLU(),
 		    //torch::nn::Dropout(0.2),
 		    torch::nn::Linear(256, 128),
 		    torch::nn::ReLU(),
-		    torch::nn::Linear(128, n_out),
-			torch::nn::Tanh())),
-          mu_(torch::full(n_out, 0.)),
-          log_std_(torch::full(n_out, std)),
-	    critic_network(torch::nn::Sequential(
-		    torch::nn::Linear(n_in, 1024),
-		    torch::nn::ReLU(),
-		    torch::nn::Linear(1024, 512),
-		    torch::nn::ReLU(),
 		    //torch::nn::Dropout(0.2),
-		    torch::nn::Linear(512, 256),
-		    torch::nn::ReLU(),
+		    //torch::nn::Linear(1024, 1024),
+			//torch::nn::ReLU(),
 		    //torch::nn::Dropout(0.2),
-		    torch::nn::Linear(256, 128),
-		    torch::nn::ReLU(),
-		    torch::nn::Linear(128, 64),
-		    torch::nn::ReLU(),
+		    //torch::nn::Linear(1024, 1024),
+			//torch::nn::ReLU(),
 		    //torch::nn::Dropout(0.2),
-		    torch::nn::Linear(64, n_out),
-		    torch::nn::Tanh(),
-		    torch::nn::Linear(n_out, 1)
+		    //torch::nn::Linear(1024, 1024),
+		    //torch::nn::ReLU(),
+		    // torch::nn::Dropout(0.2),
+		    //torch::nn::Linear(128, 64),
+		    //torch::nn::ReLU(),
+		    //torch::nn::Dropout(0.2),
+		    //torch::nn::Linear(64, n_out),
+			//torch::nn::ReLU(),
+		    torch::nn::Linear(128, 1)
         ))
           
           // Critic
@@ -73,6 +100,8 @@ struct ActorCriticImpl : public torch::nn::Module
 	   // c_lin4_(torch::nn::Linear(32, n_out)),
     //      c_val_(torch::nn::Linear(n_out, 1)) 
     {
+	    //register_module("conv_layers", conv_layers);
+	    //register_module("scalar_fc_layers", scalar_fc_layers);
 	    register_module("actor_network", actor_network);
         // Register the modules.
      //   register_module("a_lin1", a_lin1_);
@@ -81,6 +110,7 @@ struct ActorCriticImpl : public torch::nn::Module
 	    //register_module("a_lin4", a_lin4_);
         register_parameter("log_std", log_std_);
 	    register_module("critic_network", critic_network);
+	
 
      //   register_module("c_lin1", c_lin1_);
      //   register_module("c_lin2", c_lin2_);
@@ -116,6 +146,18 @@ struct ActorCriticImpl : public torch::nn::Module
 	    // val = c_val_->forward(val);
 	    torch::Tensor val = critic_network->forward(x);
 	    return val;
+    }
+
+	// Forward pass.
+    auto actor_parameters()
+    {
+	    return actor_network->parameters();
+    }
+
+	// Forward pass.
+    auto critic_parameters()
+    {
+	    return critic_network->parameters();
     }
 
 	// Forward pass.
