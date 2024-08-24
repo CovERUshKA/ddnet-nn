@@ -7,7 +7,7 @@ Steps to build on Windows:
 2) Install NVTX from CUDA 11.8.
 3) Download libtorch with cuda support and add it to ddnet-libs
 4) Call cmake so it will generate files to build
-5) Link dependencies in Visual Studio:
+5) Link dependencies in Visual Studio for DDNet-Server:
     ## Libraries:
     D:\GitHub\ddnet-nn\ddnet-libs\libtorch-win-shared-with-deps-latest+cu\libtorch\lib\c10.lib \
     D:\GitHub\ddnet-nn\ddnet-libs\libtorch-win-shared-with-deps-latest+cu\libtorch\lib\kineto.lib \
@@ -24,4 +24,4 @@ Steps to build on Windows:
     C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.4/include \
     D:\GitHub\ddnet-nn\ddnet-libs\libtorch-win-shared-with-deps-latest+cu\libtorch\include\torch\csrc\api\include \
     D:\GitHub\ddnet-nn\ddnet-libs\libtorch-win-shared-with-deps-latest+cu\libtorch\include
-6) Now try to compile.
+6) Now try to compile DDNet-Server.
