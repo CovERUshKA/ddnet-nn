@@ -25,3 +25,5 @@ Steps to build on Windows:
     D:\GitHub\ddnet-nn\ddnet-libs\libtorch-win-shared-with-deps-latest+cu\libtorch\include\torch\csrc\api\include \
     D:\GitHub\ddnet-nn\ddnet-libs\libtorch-win-shared-with-deps-latest+cu\libtorch\include
 6) Now try to compile DDNet-Server.
+
+Example of trained neural network - https://www.youtube.com/watch?v=LaiUJSzhEJc
