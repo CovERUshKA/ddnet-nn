@@ -20,14 +20,17 @@ double actor_learning_rate = 5e-5; // Default: 5e-5
 double critic_learning_rate = 2e-4; // Default: 1e-4
 //double weight_decay = 0.0001;
 
-int64_t mini_batch_size = 8000; // 4096, 8192, 16384, 32768
-int64_t ppo_epochs = 2; // Default: 4
+int64_t mini_batch_size = 16000; // 4096, 8192, 16384, 32768
+int64_t count_mini_batches = 1;
+int64_t max_mini_batch_size = 16000; // 4096, 8192, 16384, 32768
+int64_t ppo_epochs = 1; // Default: 4
 double dbeta = 1e-3; // Default: 1e-3
 double clip_param = 0.2; // Default: 0.2
 float gamma = 0.99f; // Default: 0.99f
 float lambda = 0.95f;
 
-ActorCritic ac(n_in, n_out, stdrt);
+ActorCritic ac_update(n_in, n_out, stdrt);
+ActorCritic ac_work(n_in, n_out, stdrt);
 std::shared_ptr<torch::optim::Adam> opt; //(ac->parameters(), 1e-2);
 //std::shared_ptr<torch::optim::Adam> actor_opt;
 //std::shared_ptr<torch::optim::Adam> ocritic;
@@ -35,6 +38,8 @@ std::shared_ptr<torch::optim::ReduceLROnPlateauScheduler> scheduler;
 
 VT states;
 VT actions;
+std::vector<VT> states_bots;
+std::vector<VT> actions_bots;
 std::vector<float> rewards;
 std::vector<bool> dones;
 
@@ -81,14 +86,29 @@ void generate_random_hyperparameters()
 }
 
 ModelManager::ModelManager(size_t batch_size, size_t count_players) :
-	iReplaysPerBot(batch_size / count_players), count_bots(count_players)
+	batch_size(batch_size), iReplaysPerBot(batch_size / count_players), count_bots(count_players)
 {
 	printf("CUDA is available: %d\n", torch::cuda::is_available());
+
+	// Global Speedups
+	// Enable optimized cuDNN algorithms, works best with non-fluxuating input size, perfect for RL
+	// https://discuss.pytorch.org/t/what-does-torch-backends-cudnn-benchmark-do/5936
+	at::globalContext().setBenchmarkCuDNN(true);
+
+	// Use float32 tensor cores on Ampere GPUs, less precision for ~7x speedup
+	// https://pytorch.org/docs/stable/notes/cuda.html#tensorfloat-32-tf32-on-ampere-devices
+	at::globalContext().setAllowTF32CuBLAS(true);
+	at::globalContext().setAllowTF32CuDNN(true);
+
+	// Used FP16 mixed precision
+	// https://pytorch.org/docs/stable/notes/cuda.html#reduced-precision-reduction-in-fp16-gemms
+	at::globalContext().setAllowFP16ReductionCuBLAS(true);
+
 	//net_module.eval();
 	//torch::set_num_threads(4);
 	//torch::set_num_interop_threads(4);
 	//generate_random_hyperparameters();
-	ac->to(precision);
+	ac_update->to(precision);
 	//ac->normal(0., stdrt);
 	//ac->eval();
 	//learning_rate = 1e-6;
@@ -110,11 +130,11 @@ ModelManager::ModelManager(size_t batch_size, size_t count_players) :
 	// Initialize the Adam optimizer with the parameter group
 	std::vector<torch::optim::OptimizerParamGroup> param_groups;
 
-	param_groups.push_back(torch::optim::OptimizerParamGroup({ac->actor_network->parameters()},
+	param_groups.push_back(torch::optim::OptimizerParamGroup({ac_update->actor_network->parameters()},
 							std::make_unique<torch::optim::AdamOptions>(actor_learning_rate)));
-	param_groups.push_back(torch::optim::OptimizerParamGroup({ac->critic_network->parameters()},
+	param_groups.push_back(torch::optim::OptimizerParamGroup({ac_update->critic_network->parameters()},
 							std::make_unique<torch::optim::AdamOptions>(critic_learning_rate)));
-	param_groups.push_back(torch::optim::OptimizerParamGroup({ac->log_std_},
+	param_groups.push_back(torch::optim::OptimizerParamGroup({ac_update->log_std_},
 		std::make_unique<torch::optim::AdamOptions>(actor_learning_rate)));
 
 	// Set different learning rates for each group
@@ -138,34 +158,54 @@ ModelManager::ModelManager(size_t batch_size, size_t count_players) :
 	//critic_opt = std::make_shared<torch::optim::Adam>(ac->critic_parameters(), critic_learning_rate);
 	//opt = std::make_shared<torch::optim::Adam>(ac->parameters(), learning_rate);
 	opt = std::make_shared<torch::optim::Adam>(param_groups);
-	//torch::load(ac, "train\\1724427150860\\models\\last_model.pt");
-	//torch::load(*opt, "train\\1724427150860\\models\\last_optimizer.pt");
-	//scheduler = std::make_shared<torch::optim::ReduceLROnPlateauScheduler>(*opt, /* mode */ torch::optim::ReduceLROnPlateauScheduler::max, /* factor */ 0.5, /* patience */ 20);
-	/*for(auto &param_group : opt->param_groups())
-	{
-		if(param_group.options().get_lr() == 5e-5)
-		{
-			printf("Setting\n");
-			param_group.options().set_lr(1e-5);
-			printf("Setted\n");
-		}
+	//torch::load(ac_update, "train\\1725478161137\\models\\last_model.pt");
+	//torch::load(*opt, "train\\1725478161137\\models\\last_optimizer.pt");
+	//scheduler = std::make_shared<torch::optim::ReduceLROnPlateauScheduler>(*opt, /* mode */ torch::optim::ReduceLROnPlateauScheduler::max, /* factor */ 0.2, /* patience */ 10);
+	//for(auto &param_group : opt->param_groups())
+	//{
+	//	std::cout << param_group.options().get_lr() << std::endl;
+	//	if(param_group.options().get_lr() == 3e-5)
+	//	{
+	//		printf("Setting\n");
+	//		param_group.options().set_lr(1e-5);
+	//		printf("Setted\n");
+	//	}
 
-		if(param_group.options().get_lr() == 1e-4)
-		{
-			printf("Setting\n");
-			param_group.options().set_lr(2e-5);
-			printf("Setted\n");
-		}
-	}*/
+	//	if(param_group.options().get_lr() == .00036)
+	//	{
+	//		printf("Setting\n");
+	//		param_group.options().set_lr(2e-4);
+	//		printf("Setted\n");
+	//	}
+
+	//	/*if(param_group.options().get_lr() == 2e-4)
+	//	{
+	//		printf("Setting\n");
+	//		param_group.options().set_lr(3e-5);
+	//		printf("Setted\n");
+	//	}*/
+	//}
 	//Sleep(7000);
-	ac->to(device);
+	ac_update->to(device);
 	//Sleep(7000);
 	// opt(ac->parameters(), 1e-3);
 	//ac->eval();
-	if(ac->is_training())
+	if(ac_update->is_training())
 	{
 		PPO::Initilize(batch_size, count_bots);
-		ac->presample_normal(iReplaysPerBot, count_bots);
+		printf("Copying...\n");
+		try
+		{
+			ac_work->copy_from(ac_update.get());
+			//*opt_work = *opt_update->load(;
+		}
+		catch(const std::exception &e)
+		{
+			std::cout << "ac_work->copy_from crashed with reason: " << e.what() << std::endl;
+			exit(1);
+		}
+		printf("Copied.\n");
+		ac_work->presample_normal(iReplaysPerBot * 1.5, count_bots);
 		cout << "Learning rate: " << learning_rate << " Gamma: " << gamma << " Beta: " << dbeta << " clip_param: " << clip_param << " Epochs: " << ppo_epochs << " Mini batch size: " << mini_batch_size << endl;
 	}
 	//at::cuda::setCurrentCUDAStream(myStream);
@@ -178,7 +218,8 @@ std::vector<ModelOutput> ModelManager::Decide(
 	double &time_forward,
 	double &time_normal,
 	double &time_to_cpu,
-	double &time_process_last)
+	double &time_process_last,
+	bool validating)
 {
 	auto decide_time = std::chrono::high_resolution_clock::now();
 	torch::NoGradGuard no_grad;
@@ -211,7 +252,7 @@ std::vector<ModelOutput> ModelManager::Decide(
 	time_pre_forward = std::chrono::duration<double>(now - decide_time).count() * 1000.;
 	//std::cout << "Time to allocate and transfer: " << std::chrono::duration<double>(now - decide_time).count() << std::endl;
 	decide_time = std::chrono::high_resolution_clock::now();
-	auto av = ac->actor_forward(state_forward);
+	auto av = ac_work->actor_forward(state_forward);
 	//at::cuda::getCurrentCUDAStream().synchronize();
 
 	now = std::chrono::high_resolution_clock::now();
@@ -219,8 +260,10 @@ std::vector<ModelOutput> ModelManager::Decide(
 	decide_time = std::chrono::high_resolution_clock::now();
 
 	//printf("2.1\n");
-
-	av = ac->normal_actor(av);
+	if(!validating)
+	{
+		av = ac_work->normal_actor(av);
+	}
 	//at::cuda::getCurrentCUDAStream().synchronize();
 
 	now = std::chrono::high_resolution_clock::now();
@@ -269,10 +312,9 @@ std::vector<ModelOutput> ModelManager::Decide(
 	auto tActions_cpu = av.clone().to(torch::kCPU, true); // tActions.to(torch::kCPU) av
 	torch::Tensor state_gpu = torch::cat({state_inputs_gpu, blocks_input_gpu}, 1);
 	//auto decide_time = std::chrono::high_resolution_clock::now();
-	
-	if(ac->is_training())
+	if(ac_work->is_training() && !validating)
 	{
-		auto tLogProbs = ac->log_prob(tActions);
+		auto tLogProbs = ac_work->log_prob(tActions);
 		states.push_back(state_gpu);
 		actions.push_back(tActions);
 		// values.push_back(tValues);
@@ -499,7 +541,7 @@ std::vector<ModelOutput> ModelManager::Decide(
 void ModelManager::Reward(float reward, bool done)
 {
 	//float don = (float)done;
-	if(!ac->is_training())
+	if(!ac_work->is_training())
 	{
 		return;
 	}
@@ -543,9 +585,9 @@ void ModelManager::Reward(float reward, bool done)
 	return;
 }
 
-void ModelManager::SaveReplays()
+void ModelManager::SaveReplays(bool& is_full)
 {
-	if(!ac->is_training())
+	if(!ac_work->is_training())
 	{
 		return;
 	}
@@ -565,8 +607,16 @@ void ModelManager::SaveReplays()
 		//tDones = tDones.to(device, myStream);
 		//std::cout << tDones.sizes() << std::endl;
 
-
-		PPO::save_replay(states[0], actions[0], log_probs[0], rewards, dones);
+		try
+		{
+			PPO::save_replay(states[0], actions[0], log_probs[0], rewards, dones, is_full);
+		}
+		catch(const std::exception &e)
+		{
+			std::cout << "PPO::save_replay crashed with reason: " << e.what() << std::endl;
+			exit(1);
+		}
+		
 	}
 
 	states.clear();
@@ -581,14 +631,19 @@ void ModelManager::SaveReplays()
 	return;
 }
 
-void ModelManager::Update(double avg_reward, double &avg_training_loss, double &avg_actor_loss, double &avg_critic_loss)
+size_t ModelManager::GetCountEpisodes()
+{
+	return PPO::count_of_episodes();
+}
+
+void ModelManager::Update(double avg_reward, int episodes, bool &updated, double &avg_training_loss, double &avg_actor_loss, double &avg_critic_loss)
 {
 	// Update.
 	//printf("Updating the network.\n");
 	//printf("1");
 	//values.push_back(std::get<1>(ac->forward(states[states.size() - 1])));
 
-	if(!ac->is_training())
+	if(!ac_work->is_training())
 	{
 		return;
 	}
@@ -609,17 +664,71 @@ void ModelManager::Update(double avg_reward, double &avg_training_loss, double &
 	//torch::Tensor t_advantages = t_returns - t_values.slice(0, 0, rewards.size());
 	//printf("3");
 	//printf("UPDATING111\n");
+	static double episodes_processed = 0;
+	//cout << "All: " << PPO::count_of_episodes() << endl;
+	int count_replays = PPO::count_of_replays();
+	bool is_new_count_mini_batch_size = false;
+	//std::cout << "count_replays: " << count_replays << std::endl;
+	//std::cout << "PPO::count_of_episodes(): " << PPO::count_of_episodes() << std::endl;
+	while(true)
+	{
+		double count_batches = (double)count_replays / (double)(mini_batch_size * count_mini_batches);
+		if((double)PPO::count_of_episodes() / count_batches < 300)
+		{
+			count_mini_batches += 1;
+			//std::cout << 1e-5 + (1e-5 / 2.) * (count_mini_batches - 1) << std::endl;
+			//opt->param_groups()[0].options().set_lr(1.5e-5 + 1e-5 * (count_mini_batches - 1));
+			//opt->param_groups()[1].options().set_lr(3e-4 + (2e-4 * 4 / 10.) * (count_mini_batches - 1));
+			//opt->param_groups()[2].options().set_lr(1.5e-5 + 1e-5 * (count_mini_batches - 1));
+			//for(auto &param_group : opt->param_groups())
+			//{
+			//	param_group.options().set_lr(param_group.options().get_lr() + (1e-5 * sqrt(2) / 10.))
+			//	/*std::cout << param_group.options().get_lr() << std::endl;
+			//	if(param_group.options().get_lr() == 5e-5)
+			//	{
+			//		printf("Setting\n");
+			//		param_group.options().set_lr(1e-5);
+			//		printf("Setted\n");
+			//	}*/
+
+			//	/*if(param_group.options().get_lr() == 2e-4)
+			//	{
+			//		printf("Setting\n");
+			//		param_group.options().set_lr(3e-5);
+			//		printf("Setted\n");
+			//	}*/
+			//}
+			is_new_count_mini_batch_size = true;
+		}
+		else
+			break;
+	}
+	/*if(is_new_count_mini_batch_size)
+	{
+		cout << "New count mini batch size: " << count_mini_batches << endl;
+	}*/
+	auto processed = PPO::count_of_episodes() * ((double)(count_replays - count_replays % (mini_batch_size * count_mini_batches)) / (double)count_replays);
+	episodes_processed += processed;
+	//cout << "Processed: " << processed << endl;
+	//printf("PPO::update\n");
 	try
 	{
-		PPO::update(ac, opt, rewards.size(), ppo_epochs, mini_batch_size, dbeta, gamma, lambda, device, avg_training_loss, avg_actor_loss, avg_critic_loss, clip_param);
+		PPO::update(ac_update, ac_work, opt, rewards.size(), ppo_epochs, mini_batch_size, count_mini_batches, dbeta, gamma, lambda, device, avg_training_loss, avg_actor_loss, avg_critic_loss, clip_param);
 	}
 	catch(const std::exception &e)
 	{
 		std::cout << "PPO::update crashed with reason: " << e.what() << std::endl;
 		exit(1);
 	}
+	if(episodes_processed > 100000)
+	{
+		ac_work->copy_from(ac_update.get());
+		episodes_processed = 0;
+		updated = true;
+		count_mini_batches = 1;
+	}
 	//scheduler->step(avg_reward);
-	ac->presample_normal(iReplaysPerBot, count_bots);
+	ac_work->presample_normal(iReplaysPerBot * 1.5, count_bots);
 	/*for(auto &group : opt->param_groups())
 	{
 		auto lr = group.options().get_lr();
@@ -634,7 +743,7 @@ void ModelManager::Update(double avg_reward, double &avg_training_loss, double &
 
 void ModelManager::Save(std::string filename)
 {
-	torch::save(ac, filename + "_model.pt");
+	torch::save(ac_update, filename + "_model.pt");
 	torch::save(*opt, filename + "_optimizer.pt");
 }
 
@@ -671,5 +780,5 @@ int64_t ModelManager::GetCountPPOEpochs()
 
 bool ModelManager::IsTraining()
 {
-	return ac->is_training();
+	return ac_work->is_training();
 }

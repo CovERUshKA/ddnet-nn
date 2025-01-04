@@ -107,6 +107,7 @@ class CServer : public IServer
 	class IConsole *m_pConsole;
 	class IStorage *m_pStorage;
 	class IEngineAntibot *m_pAntibot;
+	class CNeuralNetwork *m_pNeuralNetwork;
 	class IRegister *m_pRegister;
 
 #if defined(CONF_UPNP)
@@ -129,6 +130,7 @@ public:
 	class IStorage *Storage() { return m_pStorage; }
 	class IEngineAntibot *Antibot() { return m_pAntibot; }
 	class CDbConnectionPool *DbPool() { return m_pConnectionPool; }
+	class CNeuralNetwork *NeuralNetwork() { return m_pNeuralNetwork; }
 
 	enum
 	{
@@ -273,9 +275,6 @@ public:
 
 	CServer();
 	~CServer();
-
-	CPlayer *AddBot(const char *Name);
-	int TestNN();
 
 	bool IsClientNameAvailable(int ClientID, const char *pNameRequest);
 	bool SetClientNameImpl(int ClientID, const char *pNameRequest, bool Set);

@@ -48,7 +48,7 @@ public:
 
 	int distanceToGoal(std::pair<int, int> pos)
 	{
-		return distance[pos.first][pos.second] == 0;
+		return distance[pos.first][pos.second];
 	}
 
 	bool isGoal(int Y, int X)

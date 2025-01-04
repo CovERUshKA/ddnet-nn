@@ -596,6 +596,11 @@ public:
 		return pEntries->size();
 	}
 
+	bool CpyFile(const char *pOldName, const char *pNewName, bool FailIfExist) override
+	{
+		return CopyFileA(pOldName, pNewName, FailIfExist) != 0;
+	}
+
 	bool RemoveFile(const char *pFilename, int Type) override
 	{
 		dbg_assert(Type == TYPE_ABSOLUTE || (Type >= TYPE_SAVE && Type < m_NumPaths), "Type invalid");

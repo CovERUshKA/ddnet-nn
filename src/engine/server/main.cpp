@@ -14,6 +14,7 @@
 #include <engine/server/databases/connection.h>
 #include <engine/server/server.h>
 #include <engine/server/server_logger.h>
+#include <engine/server/NN/NeuralNetwork.h>
 
 #include <engine/shared/assertion_logger.h>
 #include <engine/shared/config.h>
@@ -112,6 +113,7 @@ int main(int argc, const char **argv)
 	IStorage *pStorage = CreateStorage(IStorage::STORAGETYPE_SERVER, argc, argv);
 	IConfigManager *pConfigManager = CreateConfigManager();
 	IEngineAntibot *pEngineAntibot = CreateEngineAntibot();
+	CNeuralNetwork *pNeuralNetwork = new CNeuralNetwork();
 
 	pFutureAssertionLogger->Set(CreateAssertionLogger(pStorage, GAME_NAME));
 #if defined(CONF_EXCEPTION_HANDLING)
@@ -137,6 +139,7 @@ int main(int argc, const char **argv)
 		RegisterFail = RegisterFail || !pKernel->RegisterInterface(pConfigManager);
 		RegisterFail = RegisterFail || !pKernel->RegisterInterface(pEngineAntibot);
 		RegisterFail = RegisterFail || !pKernel->RegisterInterface(static_cast<IAntibot *>(pEngineAntibot), false);
+		RegisterFail = RegisterFail || !pKernel->RegisterInterface(pNeuralNetwork);
 
 		if(RegisterFail)
 		{

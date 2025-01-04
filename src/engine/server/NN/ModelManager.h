@@ -64,7 +64,7 @@ struct ModelOutput
 
 struct ModelManager
 {
-	int count_bots, iReplaysPerBot;
+	int count_bots, iReplaysPerBot, batch_size;
 	ModelManager(size_t batch_size, size_t count_players);
 
 	//ModelOutput Decide(ModelInputInputs &input);
@@ -75,13 +75,14 @@ struct ModelManager
 		double &time_forward,
 		double &time_normal,
 		double &time_to_cpu,
-		double &time_process_last);
+		double &time_process_last,
+		bool validating = false);
 	//std::vector<ModelOutput> Decide(std::vector<ModelInput> &input);
 
 	void Reward(float reward, bool done);
-	void SaveReplays();
+	void SaveReplays(bool &is_full);
 
-	void Update(double avg_reward, double &avg_training_loss, double &avg_actor_loss, double &avg_critic_loss);
+	void Update(double avg_reward, int dies, bool &updated, double &avg_training_loss, double &avg_actor_loss, double &avg_critic_loss);
 
 	void Save(std::string filename);
 
@@ -96,4 +97,5 @@ struct ModelManager
 	int64_t GetMiniBatchSize();
 	// Returns count of PPO epochs
 	int64_t GetCountPPOEpochs();
+	size_t GetCountEpisodes();
 };

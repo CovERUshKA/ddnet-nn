@@ -130,7 +130,16 @@ struct ActorCriticImpl : public torch::nn::Module
         //mu_ = torch::relu(a_lin2_->forward(mu_));
 	    //mu_ = torch::relu(a_lin3_->forward(mu_));
 	    //mu_ = torch::tanh(a_lin4_->forward(mu_));
-	    mu_ = actor_network->forward(x);
+	    try
+	    {
+		    mu_ = actor_network->forward(x);
+
+	    }
+	    catch(const std::exception &e)
+	    {
+		    std::cout << "actor_network->forward crashed with reason: " << e.what() << std::endl;
+		    exit(1);
+	    }
 
 	    return mu_;
     }
@@ -146,6 +155,44 @@ struct ActorCriticImpl : public torch::nn::Module
 	    // val = c_val_->forward(val);
 	    torch::Tensor val = critic_network->forward(x);
 	    return val;
+    }
+
+	// Copy constructor
+    ActorCriticImpl(const ActorCriticImpl *other)
+    {
+	    actor_network = *(torch::nn::Sequential*)(other->actor_network->clone().get());
+	    log_std_ = other->log_std_.clone();
+	    critic_network = *(torch::nn::Sequential*)(other->critic_network->clone().get());
+	    register_module("actor_network", actor_network);
+	    register_parameter("log_std", log_std_);
+	    register_module("critic_network", critic_network);
+    }
+
+	void copy_from(const ActorCriticImpl *other)
+    {
+		//printf("1\n");
+	    // Clone the actor network from the other model
+		actor_network = std::dynamic_pointer_cast<torch::nn::SequentialImpl>(other->actor_network->clone());
+	    //actor_network = *(torch::nn::Sequential*)(other->actor_network->clone().get());
+		//printf("1\n");
+
+	    // Clone the critic network from the other model
+		critic_network = std::dynamic_pointer_cast<torch::nn::SequentialImpl>(other->critic_network->clone());
+		//printf("1\n");
+
+
+	    // Copy the log_std_ parameter
+	    log_std_ = other->log_std_.clone();
+		//printf("1\n");
+
+	    // Re-register the cloned modules and parameters
+		//replace_module("actor_network", actor_network);
+		//printf("1\n");
+		//unregister_parameter("log_std");
+	    //register_parameter("log_std", log_std_);
+		//printf("1\n");
+		//replace_module("critic_network", critic_network);
+		//printf("1\n");
     }
 
 	// Forward pass.

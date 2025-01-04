@@ -1173,7 +1173,7 @@ void CGameContext::ConStartFightNN(IConsole::IResult *pResult, void *pUserData)
 
 				CServer* server = (CServer*)pSelf->Server();
 
-				auto pMainBot = server->AddBot("NN");
+				/*auto pMainBot = server->AddBot("NN");
 				auto main_character = pMainBot->GetCharacter();
 				if(const char *pError = pController->m_Teams.SetCharacterTeam(pMainBot->GetCID(), Team))
 				{
@@ -1197,7 +1197,7 @@ void CGameContext::ConStartFightNN(IConsole::IResult *pResult, void *pUserData)
 
 				player_character->m_Pos = vec2(28.5f * 32, 20.5f * 32);
 				main_character->m_Pos = vec2(34.5f * 32, 20.5f * 32);
-				ball_character->m_Pos = vec2(24.5f * 32, 26.5f * 32);
+				ball_character->m_Pos = vec2(24.5f * 32, 26.5f * 32);*/
 
 			}
 		}
