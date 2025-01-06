@@ -132,7 +132,7 @@ struct ActorCriticImpl : public torch::nn::Module
 	    //mu_ = torch::tanh(a_lin4_->forward(mu_));
 	    try
 	    {
-		    mu_ = actor_network->forward(x);
+		    mu_ = actor_network->forward(prepare_tensor(x));
 
 	    }
 	    catch(const std::exception &e)
@@ -148,13 +148,46 @@ struct ActorCriticImpl : public torch::nn::Module
     auto critic_forward(torch::Tensor x) -> torch::Tensor
     {
 	    // Critic.
+
 	    // torch::Tensor val = torch::relu(c_lin1_->forward(x));
 	    // val = torch::relu(c_lin2_->forward(val));
 	    ////val = torch::relu(c_lin3_->forward(val));
 	    // val = torch::relu(c_lin4_->forward(val));
 	    // val = c_val_->forward(val);
-	    torch::Tensor val = critic_network->forward(x);
+		torch::Tensor val = critic_network->forward(prepare_tensor(x));
 	    return val;
+    }
+
+    torch::Tensor extract_blocks_vectorized(
+	    const torch::Tensor &map_tensor,
+	    const torch::Tensor &coords,
+	    int64_t block_size)
+    {
+	    // Number of blocks to extract
+	    int64_t batch_size = coords.size(0);
+
+	    // Generate row indices
+	    auto x_range = torch::arange(0, block_size, map_tensor.device()).view({1, block_size, 1});
+	    auto x = coords.index({torch::arange(0, batch_size, torch::kLong).to(map_tensor.device()), 0})
+			     .view({batch_size, 1, 1}) +
+		     x_range;
+
+	    // Generate column indices
+	    auto y_range = torch::arange(0, block_size, map_tensor.device()).view({1, 1, block_size});
+	    auto y = coords.index({torch::arange(0, batch_size, torch::kLong).to(map_tensor.device()), 1})
+			     .view({batch_size, 1, 1}) +
+		     y_range;
+
+	    // Perform advanced indexing to extract blocks
+	    auto blocks = map_tensor.index({x, y});
+	    return blocks;
+    }
+
+	// Prepare tensor
+    auto prepare_tensor(torch::Tensor x) -> torch::Tensor
+    {
+	    
+	    return x;
     }
 
 	// Copy constructor

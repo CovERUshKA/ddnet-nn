@@ -15,14 +15,14 @@ int64_t n_scalar_in = 78;
 int64_t n_grid_channels = 3;
 int64_t n_out = 9;
 double stdrt = 2e-2;
-double learning_rate = 3e-5; // Default: 5e-5
+double learning_rate = 5e-5; // Default: 5e-5
 double actor_learning_rate = 5e-5; // Default: 5e-5
 double critic_learning_rate = 2e-4; // Default: 1e-4
 //double weight_decay = 0.0001;
 
-int64_t mini_batch_size = 16000; // 4096, 8192, 16384, 32768
+int64_t mini_batch_size = 8000; // 4096, 8192, 16384, 32768
 int64_t count_mini_batches = 1;
-int64_t max_mini_batch_size = 16000; // 4096, 8192, 16384, 32768
+int64_t max_mini_batch_size = 8000; // 4096, 8192, 16384, 32768
 int64_t ppo_epochs = 1; // Default: 4
 double dbeta = 1e-3; // Default: 1e-3
 double clip_param = 0.2; // Default: 0.2
@@ -158,8 +158,8 @@ ModelManager::ModelManager(size_t batch_size, size_t count_players) :
 	//critic_opt = std::make_shared<torch::optim::Adam>(ac->critic_parameters(), critic_learning_rate);
 	//opt = std::make_shared<torch::optim::Adam>(ac->parameters(), learning_rate);
 	opt = std::make_shared<torch::optim::Adam>(param_groups);
-	//torch::load(ac_update, "train\\1725478161137\\models\\last_model.pt");
-	//torch::load(*opt, "train\\1725478161137\\models\\last_optimizer.pt");
+	//torch::load(ac_update, "train\\1736171292641\\models\\last_model.pt");
+	//torch::load(*opt, "train\\1736171292641\\models\\last_optimizer.pt");
 	//scheduler = std::make_shared<torch::optim::ReduceLROnPlateauScheduler>(*opt, /* mode */ torch::optim::ReduceLROnPlateauScheduler::max, /* factor */ 0.2, /* patience */ 10);
 	//for(auto &param_group : opt->param_groups())
 	//{
@@ -670,39 +670,45 @@ void ModelManager::Update(double avg_reward, int episodes, bool &updated, double
 	bool is_new_count_mini_batch_size = false;
 	//std::cout << "count_replays: " << count_replays << std::endl;
 	//std::cout << "PPO::count_of_episodes(): " << PPO::count_of_episodes() << std::endl;
-	while(true)
-	{
-		double count_batches = (double)count_replays / (double)(mini_batch_size * count_mini_batches);
-		if((double)PPO::count_of_episodes() / count_batches < 300)
-		{
-			count_mini_batches += 1;
-			//std::cout << 1e-5 + (1e-5 / 2.) * (count_mini_batches - 1) << std::endl;
-			//opt->param_groups()[0].options().set_lr(1.5e-5 + 1e-5 * (count_mini_batches - 1));
-			//opt->param_groups()[1].options().set_lr(3e-4 + (2e-4 * 4 / 10.) * (count_mini_batches - 1));
-			//opt->param_groups()[2].options().set_lr(1.5e-5 + 1e-5 * (count_mini_batches - 1));
-			//for(auto &param_group : opt->param_groups())
-			//{
-			//	param_group.options().set_lr(param_group.options().get_lr() + (1e-5 * sqrt(2) / 10.))
-			//	/*std::cout << param_group.options().get_lr() << std::endl;
-			//	if(param_group.options().get_lr() == 5e-5)
-			//	{
-			//		printf("Setting\n");
-			//		param_group.options().set_lr(1e-5);
-			//		printf("Setted\n");
-			//	}*/
+	
+	//while(true)
+	//{
+	//	double count_batches = (double)count_replays / (double)(mini_batch_size * count_mini_batches);
+	//	if((double)PPO::count_of_episodes() / count_batches < 300)
+	//	{
+	//		count_mini_batches += 1;
+	//		//std::cout << "Count of episodes: " << (double)PPO::count_of_episodes() << std::endl;
+	//		//std::cout << "Count batches: " << count_batches << std::endl;
+	//		//std::cout << "Result: " << (double)PPO::count_of_episodes() / count_batches << std::endl;
 
-			//	/*if(param_group.options().get_lr() == 2e-4)
-			//	{
-			//		printf("Setting\n");
-			//		param_group.options().set_lr(3e-5);
-			//		printf("Setted\n");
-			//	}*/
-			//}
-			is_new_count_mini_batch_size = true;
-		}
-		else
-			break;
-	}
+	//		//std::cout << 1e-5 + (1e-5 / 2.) * (count_mini_batches - 1) << std::endl;
+	//		//opt->param_groups()[0].options().set_lr(1.5e-5 + 1e-5 * (count_mini_batches - 1));
+	//		//opt->param_groups()[1].options().set_lr(3e-4 + (2e-4 * 4 / 10.) * (count_mini_batches - 1));
+	//		//opt->param_groups()[2].options().set_lr(1.5e-5 + 1e-5 * (count_mini_batches - 1));
+	//		//for(auto &param_group : opt->param_groups())
+	//		//{
+	//		//	param_group.options().set_lr(param_group.options().get_lr() + (1e-5 * sqrt(2) / 10.))
+	//		//	/*std::cout << param_group.options().get_lr() << std::endl;
+	//		//	if(param_group.options().get_lr() == 5e-5)
+	//		//	{
+	//		//		printf("Setting\n");
+	//		//		param_group.options().set_lr(1e-5);
+	//		//		printf("Setted\n");
+	//		//	}*/
+
+	//		//	/*if(param_group.options().get_lr() == 2e-4)
+	//		//	{
+	//		//		printf("Setting\n");
+	//		//		param_group.options().set_lr(3e-5);
+	//		//		printf("Setted\n");
+	//		//	}*/
+	//		//}
+	//		is_new_count_mini_batch_size = true;
+	//	}
+	//	else
+	//		break;
+	//}
+
 	/*if(is_new_count_mini_batch_size)
 	{
 		cout << "New count mini batch size: " << count_mini_batches << endl;
@@ -720,13 +726,15 @@ void ModelManager::Update(double avg_reward, int episodes, bool &updated, double
 		std::cout << "PPO::update crashed with reason: " << e.what() << std::endl;
 		exit(1);
 	}
-	if(episodes_processed > 100000)
+
+	//if(episodes_processed > 100000)
 	{
 		ac_work->copy_from(ac_update.get());
 		episodes_processed = 0;
 		updated = true;
 		count_mini_batches = 1;
 	}
+
 	//scheduler->step(avg_reward);
 	ac_work->presample_normal(iReplaysPerBot * 1.5, count_bots);
 	/*for(auto &group : opt->param_groups())

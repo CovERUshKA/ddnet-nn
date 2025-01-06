@@ -2862,46 +2862,46 @@ int CServer::Run()
 					if(m_aClients[c].m_State != CClient::STATE_INGAME)
 						continue;
 
-					if(strcmp(m_aClients[c].m_aName, "nameless tee") == 0)
-					{
-						auto gamecontext = ((CGameContext *)GameServer());
+					//if(strcmp(m_aClients[c].m_aName, "nameless tee") == 0)
+					//{
+					//	auto gamecontext = ((CGameContext *)GameServer());
 
-						auto player_char = gamecontext->GetPlayerChar(c);
+					//	auto player_char = gamecontext->GetPlayerChar(c);
 
-						if(player_char != nullptr)
-						{
-							auto gamelayer = gamecontext->Layers()->GameLayer();
+					//	if(player_char != nullptr)
+					//	{
+					//		auto gamelayer = gamecontext->Layers()->GameLayer();
 
-							const CTile *pTiles = static_cast<CTile *>(Kernel()->RequestInterface<IMap>()->GetData(gamelayer->m_Data));
+					//		const CTile *pTiles = static_cast<CTile *>(Kernel()->RequestInterface<IMap>()->GetData(gamelayer->m_Data));
 
-							const int Index = (int)(player_char->m_Pos.y / 32 + 1) * gamelayer->m_Width + (int)(player_char->m_Pos.x / 32);
-							const int GameIndex = pTiles[Index].m_Index;
-							//printf("x:%f y:%f %i\n", player_char->m_Pos.x, player_char->m_Pos.y, GameIndex);
-							//printf("x:%f y:%f\n", player_char->Core()->m_HookPos.x, player_char->Core()->m_HookPos.y);
-							//player_char->IsGrounded();
+					//		const int Index = (int)(player_char->m_Pos.y / 32 + 1) * gamelayer->m_Width + (int)(player_char->m_Pos.x / 32);
+					//		const int GameIndex = pTiles[Index].m_Index;
+					//		//printf("x:%f y:%f %i\n", player_char->m_Pos.x, player_char->m_Pos.y, GameIndex);
+					//		//printf("x:%f y:%f\n", player_char->Core()->m_HookPos.x, player_char->Core()->m_HookPos.y);
+					//		//player_char->IsGrounded();
 
-							//printf("Jumps: %i\n", player_char->GetCore().m_Jumps);
-							//printf("Grounded: %f\n", player_char->GetCore().m_Vel.x);
-						}
+					//		//printf("Jumps: %i\n", player_char->GetCore().m_Jumps);
+					//		//printf("Grounded: %f\n", player_char->GetCore().m_Vel.x);
+					//	}
 
-						//for(int y = 0; y < gamelayer->m_Height; y++)
-						//{
-						//	for(int x = 0; x < gamelayer->m_Width; x++)
-						//	{
-						//		const int Index = y * gamelayer->m_Width + x;
+					//	//for(int y = 0; y < gamelayer->m_Height; y++)
+					//	//{
+					//	//	for(int x = 0; x < gamelayer->m_Width; x++)
+					//	//	{
+					//	//		const int Index = y * gamelayer->m_Width + x;
 
-						//		// Game layer
-						//		{
-						//			char buf[256];
-						//			const int GameIndex = pTiles[Index].m_Index;
+					//	//		// Game layer
+					//	//		{
+					//	//			char buf[256];
+					//	//			const int GameIndex = pTiles[Index].m_Index;
 
-						//			sprintf(buf, "%i", GameIndex);
+					//	//			sprintf(buf, "%i", GameIndex);
 
-						//			printf("Hello\n");
-						//		}
-						//	}
-						//}
-					}
+					//	//			printf("Hello\n");
+					//	//		}
+					//	//	}
+					//	//}
+					//}
 
 					bool ClientHadInput = false;
 					for(auto &Input : m_aClients[c].m_aInputs)
@@ -2919,14 +2919,15 @@ int CServer::Run()
 					if(!ClientHadInput)
 						GameServer()->OnClientPredictedInput(c, nullptr);
 				}
-
+				auto tick_time = time_get_impl();
 				GameServer()->OnTick();
 				if(ErrorShutdown())
 				{
 					break;
 				}
+				float time_to_tick = (float)(time_get_impl() - tick_time) / (float)time_freq();
 
-				m_pNeuralNetwork->PostTick();
+				m_pNeuralNetwork->PostTick(time_to_tick);
 				//printf("5\n");
 
 				if(SpeedUpTicks)

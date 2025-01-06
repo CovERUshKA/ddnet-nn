@@ -13,10 +13,11 @@
 class CNeuralNetwork : public IInterface
 {
 	MACRO_INTERFACE("neuralnetwork", 0)
-
-	bool validated;
-	bool validating;
-	int validating_dones;
+	
+	// Validation phase
+	//bool validated;
+	//bool validating;
+	//int validating_dones;
 
 	int skip_tick;
 	int available_ticks_to_store;
@@ -41,7 +42,7 @@ class CNeuralNetwork : public IInterface
 	std::vector<std::vector<std::pair<int, int>>> vBotsPath;
 	std::vector<vec2> vBotLastPos;
 	std::vector<int> vBotsSpawnPos;
-	std::vector<int> vBotsValidateSpawnPoint;
+	//std::vector<int> vBotsValidateSpawnPoint;
 	std::vector<vec2> vBotsLastCheckPoint;
 	std::vector<float> vBotsCumulativeRewards;
 	std::vector<ModelInputInputs> vInputInputs;
@@ -89,7 +90,7 @@ public:
 	void OnInit();
 
 	void PreTick();
-	void PostTick();
+	void PostTick(float time_to_tick);
 
 	void PreOnClientPredictedEarlyInput();
 	void PreOnClientPredictedInput();
