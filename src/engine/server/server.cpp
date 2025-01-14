@@ -2584,10 +2584,6 @@ int CServer::Run()
 
 	m_AuthManager.Init();
 
-	unsigned int Seed;
-	secure_random_fill(&Seed, sizeof(Seed));
-	srand(Seed);
-
 	if(Config()->m_Debug)
 	{
 		g_UuidManager.DebugDump();

@@ -38,13 +38,10 @@ struct ModelInputInputs
 	vec2 hook_old_angle;
 
 	// Path towards the finish containing 30 steps(blocks)
-	vec2 path[30]; 
-};
+	vec2 path[30];
 
-struct ModelInputBlocks
-{
-	// Blocks indexes
-	long long blocks[33 * 33];
+	// Coordinate of the blocks
+	float x, y;
 };
 
 struct ModelOutput
@@ -65,12 +62,11 @@ struct ModelOutput
 struct ModelManager
 {
 	int count_bots, iReplaysPerBot, batch_size;
-	ModelManager(size_t batch_size, size_t count_players);
+	ModelManager(std::vector<unsigned char> &map_game_grid, int map_width, int map_height, size_t batch_size, size_t count_players, uint64_t seed);
 
 	//ModelOutput Decide(ModelInputInputs &input);
 	std::vector<ModelOutput> Decide(
 		std::vector<ModelInputInputs> &input,
-		std::vector<ModelInputBlocks> &blocks,
 		double &time_pre_forward,
 		double &time_forward,
 		double &time_normal,
@@ -81,8 +77,9 @@ struct ModelManager
 
 	void Reward(float reward, bool done);
 	void SaveReplays(bool &is_full);
+	void ErasePlayerReplays(int id);
 
-	void Update(double avg_reward, int dies, bool &updated, double &avg_training_loss, double &avg_actor_loss, double &avg_critic_loss);
+	void Update(double avg_reward, int dies, bool spawn_probabilities_updated, bool &updated, double &avg_training_loss, double &avg_actor_loss, double &avg_critic_loss);
 
 	void Save(std::string filename);
 

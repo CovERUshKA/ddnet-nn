@@ -74,18 +74,29 @@ void CNeuralNetwork::OnInit()
 	//validating = false;
 	//validating_dones = 0;
 
+
+	unsigned int Seed = 3112; // 3112
+
+	//secure_random_fill(&Seed, sizeof(Seed));
+
+	srand(Seed);
+
+	//gen = mt19937(rd());
+	gen = mt19937(Seed);
+
+	spawn_probabilities_updated = false;
+
 	skip_tick = 3;
 	count_bots = 128;
-	available_ticks_to_store = 512000;
+	available_ticks_to_store = 1024000;
 	count_ticks = available_ticks_to_store / count_bots;
 	update_tick = count_ticks * skip_tick;
-	ticks_collected = 0;
-
-	gen = mt19937(rd());
+	ticks_collected = last_update_tick = 0;
 
 	const CMapItemLayerTilemap *pTileMap = m_pGameContext->Layers()->GameLayer();
 	const CTile *pTiles = static_cast<CTile *>(Kernel()->RequestInterface<IMap>()->GetData(pTileMap->m_Data));
 
+	map_game_grid.resize(pTileMap->m_Height * pTileMap->m_Width);
 	pathfinding_grid.resize(pTileMap->m_Height);
 
 	for(int y = 0; y < pTileMap->m_Height; y++)
@@ -95,8 +106,25 @@ void CNeuralNetwork::OnInit()
 		{
 			const int Index = y * pTileMap->m_Width + x;
 			const int GameIndex = pTiles[Index].m_Index - ENTITY_OFFSET;
+			unsigned char TileIndex = pTiles[Index].m_Index;
+			map_game_grid[Index] = TileIndex;
 
-			switch(pTiles[Index].m_Index)
+			// For map game grid to neural network
+			switch(TileIndex)
+			{
+			case 1:
+				map_game_grid[Index] = 1;
+				break;
+			case 9:
+				map_game_grid[Index] = 2;
+				break;
+			default:
+				map_game_grid[Index] = 0;
+				break;
+			}
+
+			// For path finding
+			switch(TileIndex)
 			{
 			case 1:
 			case 2:
@@ -124,11 +152,11 @@ void CNeuralNetwork::OnInit()
 			}
 		}
 	}
-
+	
 	//printf("Creating pathfinder...\n");
 	dbg_msg("neuralnetwork", "Creating pathfinder...");
 	astar = new AStar(pathfinding_grid, vFinishPoses);
-	printf("Pathfinder created.\n");
+	//printf("Pathfinder created.\n");
 	dbg_msg("neuralnetwork", "Pathfinder created.");
 
 
@@ -208,9 +236,10 @@ void CNeuralNetwork::OnInit()
 	if(count_bots)
 	{
 		vBotLastPos.resize(count_bots);
+		vBotLastVel.resize(count_bots);
 		vBotsPath.resize(count_bots);
 		vInputInputs.resize(count_bots);
-		vInputBlocks.resize(count_bots);
+		//vInputBlocks.resize(count_bots);
 		vOutputs.resize(count_bots);
 		vIsPreviouslyHooked.resize(count_bots);
 		vPrevHookPos.resize(count_bots);
@@ -241,10 +270,13 @@ void CNeuralNetwork::OnInit()
 			vBotBestDistance[i] = {astar->distanceToGoal(spawn_point_pos), 0};
 			// auto tr = std::thread(RunNNForward, &model_manager, i, &vEvents, &vFinishEvents, &vInputs, &vOutputs);
 			// tr.detach();
-			// char aFilename[IO_MAX_PATH_LENGTH];
-			// str_format(aFilename, sizeof(aFilename), "%s_%s_%d_%llu.demo", m_aCurrentMap, name.c_str(), m_NetServer.Address().port, time_get());
-			// string path_demo = "train/" + dir_name + "/demos/" + aFilename;
-			// int ret = m_aDemoRecorder[i].Start(Storage(), m_pConsole, path_demo.c_str(), GameServer()->NetVersion(), m_aCurrentMap, &m_aCurrentMapSha256[MAP_TYPE_SIX], m_aCurrentMapCrc[MAP_TYPE_SIX], "server", m_aCurrentMapSize[MAP_TYPE_SIX], m_apCurrentMapData[MAP_TYPE_SIX]);
+			if (!model_manager->IsTraining())
+			{
+				char aFilename[IO_MAX_PATH_LENGTH];
+				str_format(aFilename, sizeof(aFilename), "%s_%s_%d_%llu.demo", m_pServer->m_aCurrentMap, name.c_str(), m_pServer->m_NetServer.Address().port, time_get());
+				string path_demo = "train/" + dir_name + "/demos/" + aFilename;
+				int ret = m_pServer->m_aDemoRecorder[i].Start(m_pStorage, m_pConsole, path_demo.c_str(), m_pGameContext->NetVersion(), m_pServer->m_aCurrentMap, &m_pServer->m_aCurrentMapSha256[CServer::MAP_TYPE_SIX], m_pServer->m_aCurrentMapCrc[CServer::MAP_TYPE_SIX], "server", m_pServer->m_aCurrentMapSize[CServer::MAP_TYPE_SIX], m_pServer->m_apCurrentMapData[CServer::MAP_TYPE_SIX]);
+			}
 		}
 	}
 	//printf("Bots added\n");
@@ -252,21 +284,21 @@ void CNeuralNetwork::OnInit()
 
 	//printf("Initializing neural model...\n");
 	dbg_msg("neuralnetwork", "Initializing neural model...");
-	model_manager = new ModelManager(count_bots * update_tick / skip_tick, count_bots);
+	model_manager = new ModelManager(map_game_grid, pTileMap->m_Width, pTileMap->m_Height, count_bots * update_tick / skip_tick, count_bots, Seed);
 	dbg_msg("neuralnetwork", "Model initialized.");
 
 	dbg_msg("neuralnetwork", "Creating data.csv file for statistics...");
 	//printf("Creating data.csv file for statistics...\n");
 	{
 		char aFilename[IO_MAX_PATH_LENGTH];
-		/*std::cout << model_manager.GetLearningRate() << std::endl;
+		/*std::cout << model_manager.GetLearningRate() << std::endl;à
 		std::cout << model_manager.GetMiniBatchSize() << std::endl;
 		std::cout << model_manager.GetCountPPOEpochs() << std::endl;
 		std::cout << count_bots << std::endl;
 		std::cout << update_tick << std::endl;*/
 		sprintf_s(aFilename, sizeof(aFilename), "lr%.1embs%lldppoe%lldbots%drpb%d.csv", model_manager->GetLearningRate(), model_manager->GetMiniBatchSize(), model_manager->GetCountPPOEpochs(), count_bots, update_tick);
 		logger.open("train\\" + dir_name + "\\" + aFilename);
-		logger << "Step,Average reward,TPS,Dies,Average distance,Training loss,Actor loss,Critic loss,Learning rate,Time since start,Time to decide,Time to tick,Time rest,Time pre forward,Time forward,Time normal,Time to cpu,Time process last" << endl;
+		logger << "Step,Average reward,TPS,Dies,Average distance,Training loss,Actor loss,Critic loss,Learning rate,Time since start,Time to decide,Time to tick,Time rest,Time pre forward,Time forward,Time normal,Time to cpu,Time process last,Average speed" << endl;
 	}
 	dbg_msg("neuralnetwork", "data.csv file created and initialized.");
 
@@ -275,10 +307,13 @@ void CNeuralNetwork::OnInit()
 	// Recording demo to spectate how model performs
 	string path_demo;
 	{
-		char aFilename[IO_MAX_PATH_LENGTH];
-		str_format(aFilename, sizeof(aFilename), "%s_%d_%llu.demo", m_pServer->m_aCurrentMap, m_pServer->m_NetServer.Address().port, time_get());
-		path_demo = "train/" + dir_name + "/demos/" + aFilename;
-		int ret = m_pServer->m_aDemoRecorder[0].Start(m_pStorage, m_pConsole, path_demo.c_str(), m_pGameContext->NetVersion(), m_pServer->m_aCurrentMap, &m_pServer->m_aCurrentMapSha256[CServer::MAP_TYPE_SIX], m_pServer->m_aCurrentMapCrc[CServer::MAP_TYPE_SIX], "server", m_pServer->m_aCurrentMapSize[CServer::MAP_TYPE_SIX], m_pServer->m_apCurrentMapData[CServer::MAP_TYPE_SIX]);
+		if(model_manager->IsTraining())
+		{
+			char aFilename[IO_MAX_PATH_LENGTH];
+			str_format(aFilename, sizeof(aFilename), "%s_%d_%llu.demo", m_pServer->m_aCurrentMap, m_pServer->m_NetServer.Address().port, time_get());
+			path_demo = "train/" + dir_name + "/demos/" + aFilename;
+			int ret = m_pServer->m_aDemoRecorder[0].Start(m_pStorage, m_pConsole, path_demo.c_str(), m_pGameContext->NetVersion(), m_pServer->m_aCurrentMap, &m_pServer->m_aCurrentMapSha256[CServer::MAP_TYPE_SIX], m_pServer->m_aCurrentMapCrc[CServer::MAP_TYPE_SIX], "server", m_pServer->m_aCurrentMapSize[CServer::MAP_TYPE_SIX], m_pServer->m_apCurrentMapData[CServer::MAP_TYPE_SIX]);
+		}
 	}
 
 	ticks_timer = time_get_impl();
@@ -354,7 +389,6 @@ void CNeuralNetwork::PreTick()
 
 				bot_character = bot->GetCharacter();
 				bot_character_core = bot_character->Core();
-
 				bot_character->SetSolo(true);
 
 				vBotsSpawnPos[i] = iSpawnPoint;
@@ -393,7 +427,6 @@ void CNeuralNetwork::PreTick()
 			prev_angle_dist = calc_angles_distance(actual_angle, should_angle);*/
 
 			ModelInputInputs *input_inputs = &vInputInputs[i];
-			ModelInputBlocks *input_blocks = &vInputBlocks[i];
 
 			// auto gamecontext = ((CGameContext *)GameServer());
 
@@ -469,6 +502,10 @@ void CNeuralNetwork::PreTick()
 			int prev_index_y = std::clamp((int)(vBotLastPos[i].y / 32), 0, map_height - 1);
 
 			vBotLastPos[i] = bot_pos;
+			vBotLastVel[i] = length(bot_character_core->m_Vel);
+
+			input_inputs->x = (int)(bot_pos.x / 32);
+			input_inputs->y = (int)(bot_pos.y / 32);
 
 			if(cur_index_x == prev_index_x && cur_index_y == prev_index_y)
 			{
@@ -493,55 +530,55 @@ void CNeuralNetwork::PreTick()
 			}
 			//printf("2\n");
 
-			for(size_t y = 0; y < height; y++)
-			{
-				for(size_t x = 0; x < width; x++)
-				{
-					int index_x = std::clamp((int)(bot_pos.x / 32 - width / 2 + x), 0, map_width - 1);
-					int index_y = std::clamp((int)(bot_pos.y / 32 - height / 2 + y), 0, map_height - 1);
-					int Index = index_y * map_width + index_x;
+			//for(size_t y = 0; y < height; y++)
+			//{
+			//	for(size_t x = 0; x < width; x++)
+			//	{
+			//		int index_x = std::clamp((int)(bot_pos.x / 32 - width / 2 + x), 0, map_width - 1);
+			//		int index_y = std::clamp((int)(bot_pos.y / 32 - height / 2 + y), 0, map_height - 1);
+			//		int Index = index_y * map_width + index_x;
 
-					/*if(y == height / 2 && width / 2 == x)
-					{
-						continue;
-					}*/
-					// input_blocks->blocks[block_count] = pTiles[Index].m_Index;
-					//printf("2.1\n");
+			//		/*if(y == height / 2 && width / 2 == x)
+			//		{
+			//			continue;
+			//		}*/
+			//		// input_blocks->blocks[block_count] = pTiles[Index].m_Index;
+			//		//printf("2.1\n");
 
-					switch(pTiles[Index].m_Index)
-					{
-					case 1:
-						input_blocks->blocks[block_count] = pTiles[Index].m_Index;
-						break;
-					case 9:
-						input_blocks->blocks[block_count] = 2;
-						break;
-					default:
-						input_blocks->blocks[block_count] = 0;
-						break;
-					}
-					//printf("2.2\n");
+			//		switch(pTiles[Index].m_Index)
+			//		{
+			//		case 1:
+			//			input_blocks->blocks[block_count] = pTiles[Index].m_Index;
+			//			break;
+			//		case 9:
+			//			input_blocks->blocks[block_count] = 2;
+			//			break;
+			//		default:
+			//			input_blocks->blocks[block_count] = 0;
+			//			break;
+			//		}
+			//		//printf("2.2\n");
 
-					/*switch(pTiles[Index].m_Index)
-					{
-					case 1:
-						cout << "H";
-						break;
-					case 2:
-						cout << "D";
-						break;
-					case 3:
-						cout << "U";
-						break;
-					default:
-						cout << " ";
-						break;
-					}*/
+			//		/*switch(pTiles[Index].m_Index)
+			//		{
+			//		case 1:
+			//			cout << "H";
+			//			break;
+			//		case 2:
+			//			cout << "D";
+			//			break;
+			//		case 3:
+			//			cout << "U";
+			//			break;
+			//		default:
+			//			cout << " ";
+			//			break;
+			//		}*/
 
-					block_count += 1;
-				}
-				// cout << endl;
-			}
+			//		block_count += 1;
+			//	}
+			//	// cout << endl;
+			//}
 			// summerr += time_get_impl() - decide_time;
 
 			//printf("HAHHA3.4\n");
@@ -621,7 +658,11 @@ void CNeuralNetwork::PreTick()
 		double time_to_cpu = 0;
 		double time_process_last = 0;
 		decide_time = std::chrono::high_resolution_clock::now();
-		vOutputs = model_manager->Decide(vInputInputs, vInputBlocks, time_pre_forward, time_forward, time_normal, time_to_cpu, time_process_last);
+		//printf("1.1\n");
+
+		vOutputs = model_manager->Decide(vInputInputs, time_pre_forward, time_forward, time_normal, time_to_cpu, time_process_last);
+		//printf("1.2\n");
+
 		now = std::chrono::high_resolution_clock::now();
 		cumulative_time_to_decide += std::chrono::duration_cast<std::chrono::duration<float>>(now - decide_time).count() * 1000.f;
 		cumulative_time_pre_forward += time_pre_forward;
@@ -806,16 +847,21 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 	static int moved_distance = 0;
 	//static int validating_moved_distance = 0;
 	static float cumulative_reward = 0;
+	static float cumulative_speed = 0;
 	static int count_updated = 0;
 
 	// Rewards
 	static float checkpoint_reward = 100.f / 32.f;
-	static float die_reward = -250.f / 32.f; // -500.f / 32.f
-	static float finish_reward = 1000.f / 32.f;
+	static float die_reward = -10.f; // -500.f / 32.f
+	static float finish_reward = 10.f;
+	static float speed_reward_coefficient = 0.2f;
+	static float speed_accelerate_reward_coefficient = 0.5f; 
 	static float step_reward = -0.01f;
-	static int long_no_improvements = 200;
+	static float divide_reward_by = 10.f;
 
-	static std::vector<float> rewards;
+	static int long_no_improvements_ticks = 200;
+
+	//static std::vector<float> rewards;
 	static float best_average = -999999.f;
 	static float last_saved = -999999.f;
 
@@ -827,6 +873,7 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 	// decide_time = time_get_impl();
 	if(m_pServer->Tick() % skip_tick == 0)
 	{
+		std::vector<int> vBotsIdsToEraseReplays;
 		for(size_t i = 0; i < vBots.size(); i++)
 		{
 			auto bot = vBots[i];
@@ -839,6 +886,7 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 			bool died = false;
 			bool finished = false;
 			bool freezed = false;
+			bool long_no_improvement = false;
 
 			if(bot_character != nullptr)
 			{
@@ -853,15 +901,21 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 					finished = true;
 				}
 
-				if(bot_character->m_FreezeTime || bot_character->Core()->m_IsInFreeze || pTiles[bot_block_index].m_Index == 9 || m_pServer->Tick() - vBotBestDistance[i].second >= long_no_improvements)
+				if(bot_character->m_FreezeTime || bot_character->Core()->m_IsInFreeze || pTiles[bot_block_index].m_Index == 9 /*|| m_pServer->Tick() - vBotBestDistance[i].second >= long_no_improvements_ticks*/)
 				{
 					freezed = true;
 				}
+
+				if(m_pServer->Tick() - vBotBestDistance[i].second >= long_no_improvements_ticks && !freezed && !finished)
+				{
+					long_no_improvement = true;
+					//vBotsIdsToEraseReplays.push_back(i);
+				}
 			}
 
-			if((bot_character == nullptr) || freezed || finished)
+			if((bot_character == nullptr) || freezed || finished || long_no_improvement)
 			{
-				if(bot_character == nullptr || freezed)
+				if(bot_character == nullptr || freezed || long_no_improvement)
 				{
 					died = true;
 					dies += 1;
@@ -869,48 +923,50 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 					{
 						bot->KillCharacter();
 					}
+					//printf("1\n");
+					if(!model_manager->IsTraining())
+					{
+						m_pServer->m_aDemoRecorder[bot->GetCID()].Stop();
 
-					/*m_aDemoRecorder[bot->GetCID()].Stop();
+						m_pStorage->RemoveFile(m_pServer->m_aDemoRecorder[bot->GetCID()].GetCurrentFilename(), IStorage::TYPE_ABSOLUTE);
 
-					Storage()->RemoveFile(m_aDemoRecorder[bot->GetCID()].GetCurrentFilename(), IStorage::TYPE_ABSOLUTE);
-
-					char aweweFilename[IO_MAX_PATH_LENGTH];
-					str_format(aweweFilename, sizeof(aweweFilename), "%llu_%s_%d_%llu.demo", i, m_aCurrentMap, m_NetServer.Address().port, time_get_impl());
-					path_demo = "train/" + dir_name + "/demos/" + aweweFilename;
-					int ret = m_aDemoRecorder[bot->GetCID()].Start(Storage(), m_pConsole, path_demo.c_str(), GameServer()->NetVersion(), m_aCurrentMap, &m_aCurrentMapSha256[MAP_TYPE_SIX], m_aCurrentMapCrc[MAP_TYPE_SIX], "server", m_aCurrentMapSize[MAP_TYPE_SIX], m_apCurrentMapData[MAP_TYPE_SIX]);*/
+						char aweweFilename[IO_MAX_PATH_LENGTH];
+						str_format(aweweFilename, sizeof(aweweFilename), "%llu_%s_%d_%llu.demo", i, m_pServer->m_aCurrentMap, m_pServer->m_NetServer.Address().port, time_get_impl());
+						string path_demo = "train/" + dir_name + "/demos/" + aweweFilename;
+						int ret = m_pServer->m_aDemoRecorder[bot->GetCID()].Start(m_pStorage, m_pConsole, path_demo.c_str(), m_pGameContext->NetVersion(), m_pServer->m_aCurrentMap, &m_pServer->m_aCurrentMapSha256[CServer::MAP_TYPE_SIX], m_pServer->m_aCurrentMapCrc[CServer::MAP_TYPE_SIX], "server", m_pServer->m_aCurrentMapSize[CServer::MAP_TYPE_SIX], m_pServer->m_apCurrentMapData[CServer::MAP_TYPE_SIX]);
+					}
 				}
 				else if(finished)
 				{
-					/*m_aDemoRecorder[bot->GetCID()].Stop();
+					//printf("2\n");
 
-					char aNewFilename[IO_MAX_PATH_LENGTH];
-					str_format(aNewFilename, sizeof(aNewFilename), "time_%.2f_%llu.demo", (float)(m_CurrentGameTick - bot->GetCharacter()->m_StartTime) / 50.f, time_get_impl());
-					path_demo = "train/" + dir_name + "/demos/" + aNewFilename;
-					Storage()->RenameFile(m_aDemoRecorder[bot->GetCID()].GetCurrentFilename(), path_demo.c_str(), IStorage::TYPE_ABSOLUTE);*/
+					if(!model_manager->IsTraining())
+					{
+						m_pServer->m_aDemoRecorder[bot->GetCID()].Stop();
+
+						char aNewFilename[IO_MAX_PATH_LENGTH];
+						str_format(aNewFilename, sizeof(aNewFilename), "time_%.2f_%llu.demo", (float)(m_pServer->Tick() - bot->GetCharacter()->m_StartTime) / 50.f, time_get_impl());
+						string path_demo = "train/" + dir_name + "/demos/" + aNewFilename;
+						m_pStorage->RenameFile(m_pServer->m_aDemoRecorder[bot->GetCID()].GetCurrentFilename(), path_demo.c_str(), IStorage::TYPE_ABSOLUTE);
+					}
+					//printf("3\n");
 
 					bot->KillCharacter();
 
-					/*char aFilename[IO_MAX_PATH_LENGTH];
-					str_format(aFilename, sizeof(aFilename), "%llu_%s_%d_%llu.demo", i, m_aCurrentMap, m_NetServer.Address().port, time_get_impl());
-					path_demo = "train/" + dir_name + "/demos/" + aFilename;
-					int ret = m_aDemoRecorder[bot->GetCID()].Start(m_pStorage, m_pConsole, path_demo.c_str(), m_pGameContext->NetVersion(), m_pServer->m_aCurrentMap, &m_pServer->m_aCurrentMapSha256[CServer::MAP_TYPE_SIX], m_pServer->m_aCurrentMapCrc[CServer::MAP_TYPE_SIX], "server", m_pServer->m_aCurrentMapSize[CServer::MAP_TYPE_SIX], m_pServer->m_apCurrentMapData[CServer::MAP_TYPE_SIX]);*/
+					if(!model_manager->IsTraining())
+					{
+						char aFilename[IO_MAX_PATH_LENGTH];
+						str_format(aFilename, sizeof(aFilename), "%llu_%s_%d_%llu.demo", i, m_pServer->m_aCurrentMap, m_pServer->m_NetServer.Address().port, time_get_impl());
+						string path_demo = "train/" + dir_name + "/demos/" + aFilename;
+						int ret = m_pServer->m_aDemoRecorder[bot->GetCID()].Start(m_pStorage, m_pConsole, path_demo.c_str(), m_pGameContext->NetVersion(), m_pServer->m_aCurrentMap, &m_pServer->m_aCurrentMapSha256[CServer::MAP_TYPE_SIX], m_pServer->m_aCurrentMapCrc[CServer::MAP_TYPE_SIX], "server", m_pServer->m_aCurrentMapSize[CServer::MAP_TYPE_SIX], m_pServer->m_apCurrentMapData[CServer::MAP_TYPE_SIX]);
+					}
+					//printf("4\n");
 
 					/*char aFilename[IO_MAX_PATH_LENGTH];
 					str_format(aFilename, sizeof(aFilename), "%s_%s_%d_%llu.demo", m_aCurrentMap, name.c_str(), m_NetServer.Address().port, time_get());
 					string path_demo = "train/" + dir_name + "/demos/" + aFilename;
 					int ret = m_aDemoRecorder[i].Start(Storage(), m_pConsole, path_demo.c_str(), GameServer()->NetVersion(), m_aCurrentMap, &m_aCurrentMapSha256[MAP_TYPE_SIX], m_aCurrentMapCrc[MAP_TYPE_SIX], "server", m_aCurrentMapSize[MAP_TYPE_SIX], m_apCurrentMapData[MAP_TYPE_SIX]);*/
 				}
-				//if(validating)
-				//{
-				//	validating_dones += 1;
-				//	if(validating_dones == count_bots)
-				//	{
-				//		validated = true;
-				//		validating = false;
-				//		//printf("Validated\n");
-				//		break;
-				//	}
-				//}
 
 				// decide_time = time_get_impl();
 				// bot_character->Core()->m_IsInFreeze
@@ -984,10 +1040,17 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 							vBotBestDistance[i] = {current_dist, m_pServer->Tick()};
 						}
 					}
+					//if(i == 0)
+						//std::cout << "Speed[0]: " << bot_character->Core()->m_Vel.x << std ::endl;
+					// Reward for maintaining speed
+					float speed_reward = length(bot_character->Core()->m_Vel) / 20.f * speed_reward_coefficient;
+					reward += speed_reward;
 
-					auto tick_diff = m_pServer->Tick() - vBotBestDistance[i].second;
+					float accelerate_reward = (length(bot_character->Core()->m_Vel) - vBotLastVel[i]) / 20.f * speed_accelerate_reward_coefficient;
+					reward += accelerate_reward;
 
-					auto long_stay_penalty = -0.0003f * tick_diff;
+					/*auto tick_diff = m_pServer->Tick() - vBotBestDistance[i].second;
+					auto long_stay_penalty = -0.0003f * tick_diff;*/
 
 					// Encourage to run faster
 					reward += step_reward; // step_reward
@@ -1018,8 +1081,8 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 				model_manager.Reward(reward, (m_CurrentGameTick - start_tick >= 1000) ? 1 : 0);
 				rewards.push_back(-calc_angles_distance(actual_angle, should_angle));*/
 
-				bool is_done = died || finished /*|| (m_CurrentGameTick % update_tick == 0) ? 1 : 0*/;
-				model_manager->Reward(reward, is_done);
+				bool is_done = died || finished || long_no_improvement /*|| (m_CurrentGameTick % update_tick == 0) ? 1 : 0*/;
+				model_manager->Reward(reward / divide_reward_by, is_done);
 				if(!died && !finished)
 				{
 					vBotsCumulativeRewards[i] += reward;
@@ -1028,14 +1091,22 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 				sprintf_s(reward_name, "%.1f %d", vBotsCumulativeRewards[i], vBotBestDistance[i].first);
 				memcpy(m_pServer->m_aClients[bot->GetCID()].m_aName, reward_name, strlen(reward_name) + 1);
 				// std::cout << reward << std::endl;
-				rewards.push_back(reward);
+				//rewards.push_back(reward);
 			}
 		}
 		bool is_full = false;
 		// cout << "Time rewards: " << (float)(time_get_impl() - decide_time) / (float)time_freq() << endl;
+		//printf("4444\n");
+
 		model_manager->SaveReplays(is_full);
+		/*for(auto id : vBotsIdsToEraseReplays)
+		{
+			model_manager->ErasePlayerReplays(id);
+		}
+		vBotsIdsToEraseReplays.clear();*/
 		// cout << m_CurrentGameTick << endl;
 		ticks_collected += 1;
+		//printf("333\n");
 
 		if(is_full)
 		{
@@ -1045,6 +1116,7 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 
 			float avg_reward = cumulative_reward / (float)(dies + count_bots);
 			float avg_dist = ((float)moved_distance / (float)(dies));
+			float avg_speed = ((float)moved_distance / (float)((m_pServer->Tick() - last_update_tick) * count_bots) * (float)SERVER_TICK_SPEED);
 			//float avg_valid_dist = (float)validating_moved_distance / (float)count_bots;
 			//rewards.clear();
 
@@ -1094,15 +1166,16 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 			size_t count_episodes = model_manager->GetCountEpisodes();
 			static size_t count_episodes_processed = 0;
 			static size_t count_every_update = 0;
-			model_manager->Update(avg_dist, dies, updated, avg_training_loss, avg_actor_loss, avg_critic_loss);
+			model_manager->Update(avg_dist, dies, spawn_probabilities_updated, updated, avg_training_loss, avg_actor_loss, avg_critic_loss);
 			count_episodes_processed += count_episodes;
 			count_every_update += 1;
+			last_update_tick = m_pServer->Tick();
 			// cout << "Time update: " << (float)(time_get_impl() - decide_time) / (float)time_freq() << endl;
 			if(updated)
 			{
 				count_updated += 1;
-				rewards.clear();
-				if(avg_dist - last_saved > 25)
+				//rewards.clear();
+				if(avg_dist - last_saved > last_saved * 0.1f && avg_dist - last_saved > 25)
 				{
 					if(!m_pStorage->CpyFile(("train\\" + dir_name + "\\models\\last_model.pt").c_str(), ("train\\" + dir_name + "\\models\\early_stopping_" + to_string(avg_dist) + "_model.pt").c_str(), false))
 					{
@@ -1151,17 +1224,26 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 				if(count_updated % 20 == 0 && model_manager->IsTraining())
 				{
 					dbg_msg("neuralnetwork", "UPDATING");
-					std::vector<float> vAverageDistancePerSpawn(vSpawnCumulativeReward.size());
+					std::vector<float> vAverageRewardPerSpawn(vSpawnCumulativeReward.size());
 					int count_counted = 0;
 					float cumulative_reward = 0;
+					float max_reward = 0, min_reward = 0;
 					//printf("1\n");
 					for(size_t i = 0; i < vSpawnCumulativeReward.size(); i++)
 					{
 						if(vSpawnLives[i] && vSpawnCumulativeReward[i] != 0.f)
 						{
-							float dist = vSpawnCumulativeReward[i] / (float)vSpawnLives[i];
-							cumulative_reward += dist;
-							vAverageDistancePerSpawn[i] = dist;
+							float avg_reward = vSpawnCumulativeReward[i] / (float)vSpawnLives[i];
+
+							if(min_reward == 0 && max_reward == 0)
+								min_reward = max_reward = avg_reward;
+							else if (avg_reward > max_reward)
+								max_reward = avg_reward;
+							else if (avg_reward < min_reward)
+								min_reward = avg_reward;
+
+							cumulative_reward += avg_reward;
+							vAverageRewardPerSpawn[i] = avg_reward;
 							count_counted += 1;
 						}
 					}
@@ -1174,20 +1256,31 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 					dbg_msg("neuralnetwork", "Average reward: %f", average_reward);
 					//cout << "Average reward: " << average_reward << endl;
 					//printf("1.99\n");
-					float max_reward = *max_element(vAverageDistancePerSpawn.begin(), vAverageDistancePerSpawn.end());
+					/*float max_reward = *max_element(vAverageRewardPerSpawn.begin(), vAverageRewardPerSpawn.end());
+					float min_reward = *min_element(vAverageRewardPerSpawn.begin(), vAverageRewardPerSpawn.end());*/
 					dbg_msg("neuralnetwork", "Max reward: %f", max_reward);
-					//cout << "Max reward: " << max_reward << endl;
-					//printf("2\n");
+					dbg_msg("neuralnetwork", "Min reward: %f", min_reward);
+					float reward_delta = abs(max_reward - min_reward);
+					dbg_msg("neuralnetwork", "Reward delta: %f", reward_delta);
+					
+					float distance_to_zero = abs(min_reward) < abs(max_reward) ? abs(min_reward) : abs(max_reward);
+
+					float new_min_reward = distance_to_zero;
+					float new_max_reward = distance_to_zero + reward_delta;
+					
 					for(size_t i = 0; i < vSpawnCumulativeReward.size(); i++)
 					{
 						//printf("2.1\n");
 						if(!vSpawnLives[i] || !vSpawnCumulativeReward[i])
 						{
 							//printf("2.1.1\n");
-							vAverageDistancePerSpawn[i] = average_reward;
+							vAverageRewardPerSpawn[i] = average_reward;
 						}
 						//printf("2.2\n");
-						vSpawnProbabilities[i] = max_reward - vAverageDistancePerSpawn[i] + 1;
+						float distance_to_lowest_reward = abs(vAverageRewardPerSpawn[i] - min_reward);
+						float reward = distance_to_zero + distance_to_lowest_reward;
+
+						vSpawnProbabilities[i] = new_max_reward - (reward - new_min_reward);
 						//printf("2.3\n");
 						vSpawnLives[i] = 0;
 						//printf("2.4\n");
@@ -1200,6 +1293,7 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 					{
 						cout << vSpawnProbabilities[i] << endl;
 					}*/
+					spawn_probabilities_updated = true;
 				}
 				logger << ticks_collected / count_ticks
 					    << "," << avg_reward
@@ -1220,6 +1314,7 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 					    << "," << (cumulative_time_normal / (float)update_tick)
 					    << "," << (cumulative_time_to_cpu / (float)update_tick)
 					    << "," << (cumulative_time_process_last / (float)update_tick)
+						<< "," << avg_speed
 					    << endl;
 				dbg_msg("neuralnetwork", "Avg. reward: %f TPS: %d Avg. Training Loss: %f Dies: %d Episodes: %d/%d Updates: %d Avg. distance: %f", avg_reward, ticks_per_second, avg_training_loss, dies, count_episodes, count_episodes_processed, count_every_update, avg_dist);
 					

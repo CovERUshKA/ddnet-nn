@@ -19,11 +19,14 @@ class CNeuralNetwork : public IInterface
 	//bool validating;
 	//int validating_dones;
 
+	bool spawn_probabilities_updated;
+
 	int skip_tick;
 	int available_ticks_to_store;
 	int count_ticks;
 	int update_tick;
 	int ticks_collected;
+	int last_update_tick;
 
 	std::random_device rd;
 	std::mt19937 gen;
@@ -32,6 +35,7 @@ class CNeuralNetwork : public IInterface
 	std::vector<vec2> vSpawnPoints;
 	std::vector<std::pair<int, int>> vFinishPoses;
 	std::vector<std::vector<int>> pathfinding_grid;
+	std::vector<unsigned char> map_game_grid;
 
 	std::vector<float> vSpawnCumulativeReward;
 	std::vector<int> vSpawnLives;
@@ -41,12 +45,13 @@ class CNeuralNetwork : public IInterface
 	std::vector<CPlayer *> vBots;
 	std::vector<std::vector<std::pair<int, int>>> vBotsPath;
 	std::vector<vec2> vBotLastPos;
+	std::vector<float> vBotLastVel;
 	std::vector<int> vBotsSpawnPos;
 	//std::vector<int> vBotsValidateSpawnPoint;
 	std::vector<vec2> vBotsLastCheckPoint;
 	std::vector<float> vBotsCumulativeRewards;
 	std::vector<ModelInputInputs> vInputInputs;
-	std::vector<ModelInputBlocks> vInputBlocks;
+	//std::vector<ModelInputBlocks> vInputBlocks;
 	std::vector<ModelOutput> vOutputs;
 	std::vector<bool> vIsPreviouslyHooked;
 	std::vector<vec2> vPrevHookPos;

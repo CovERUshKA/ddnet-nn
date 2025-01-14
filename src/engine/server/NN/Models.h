@@ -13,6 +13,8 @@ struct ActorCriticImpl : public torch::nn::Module
 {
 	int64_t n_in, n_out, used_presamples;
 
+	torch::Tensor map_tensor;
+
     // Actor.
 	//torch::nn::Linear a_lin1_, a_lin2_, /*a_lin3_,*/ a_lin4_;
     torch::nn::Sequential actor_network;
@@ -23,83 +25,85 @@ struct ActorCriticImpl : public torch::nn::Module
     //torch::nn::Linear c_lin1_, c_lin2_, /*c_lin3_,*/ c_lin4_, c_val_;
     torch::nn::Sequential critic_network;
 
-    ActorCriticImpl(int64_t n_in, int64_t n_out, double std) :
-	    n_in(n_in), n_out(n_out),
-		// Actor.
-       //   a_lin1_(torch::nn::Linear(n_in, 16)),
-       //   a_lin2_(torch::nn::Linear(16, 32)),
-	      ////a_lin3_(torch::nn::Linear(16, 16)),
-       //   a_lin4_(torch::nn::Linear(32, n_out)),
-	    actor_network(torch::nn::Sequential(
+	ActorCriticImpl()
+	{
+
+	}
+
+    bool Initialize(int64_t n_in, int64_t n_out, double std)
+
+    // Critic
+    // c_lin1_(torch::nn::Linear(n_in, 16)),
+    // c_lin2_(torch::nn::Linear(16, 32)),
+    //// c_lin3_(torch::nn::Linear(32, 16)),
+    // c_lin4_(torch::nn::Linear(32, n_out)),
+    //      c_val_(torch::nn::Linear(n_out, 1))
+    {
+	    n_in = n_in;
+	    n_out = n_out;
+	    actor_network = torch::nn::Sequential(
 		    torch::nn::Linear(n_in, 2048),
 		    torch::nn::ReLU(),
-			torch::nn::Linear(2048, 1024),
-		    torch::nn::ReLU(),
-		    //torch::nn::Dropout(0.2),
-		    torch::nn::Linear(1024, 512),
-		    torch::nn::ReLU(),
-		    // torch::nn::Dropout(0.2),
-		    torch::nn::Linear(512, 256),
-			torch::nn::ReLU(),
-		    //torch::nn::Dropout(0.2),
-		    torch::nn::Linear(256, 128),
-		    torch::nn::ReLU(),
-		    //torch::nn::Dropout(0.2),
-		    //torch::nn::Linear(1024, 1024),
-			//torch::nn::ReLU(),
-		    // torch::nn::Dropout(0.2),
-		    //torch::nn::Linear(1024, 1024),
-			//torch::nn::ReLU(),
-		    // torch::nn::Dropout(0.2),
-		    //torch::nn::Linear(1024, 1024),
-			//torch::nn::ReLU(),
-		    // torch::nn::Dropout(0.2),
-		    //torch::nn::Linear(256, 128),
-		    //torch::nn::ReLU(),
-		    torch::nn::Linear(128, n_out)/*,
-			torch::nn::Tanh()*/)),
-          mu_(torch::full(n_out, 0.)),
-          log_std_(torch::full(n_out, std)),
-	    critic_network(torch::nn::Sequential(
-			torch::nn::Linear(n_in, 2048),
-		    torch::nn::ReLU(),
-			//torch::nn::Dropout(0.2),
 		    torch::nn::Linear(2048, 1024),
 		    torch::nn::ReLU(),
-		    //torch::nn::Dropout(0.2),
+		    // torch::nn::Dropout(0.2),
 		    torch::nn::Linear(1024, 512),
 		    torch::nn::ReLU(),
-			//torch::nn::Dropout(0.2),
+		    // torch::nn::Dropout(0.2),
 		    torch::nn::Linear(512, 256),
-			torch::nn::ReLU(),
-		    //torch::nn::Dropout(0.2),
+		    torch::nn::ReLU(),
+		    // torch::nn::Dropout(0.2),
 		    torch::nn::Linear(256, 128),
 		    torch::nn::ReLU(),
-		    //torch::nn::Dropout(0.2),
-		    //torch::nn::Linear(1024, 1024),
-			//torch::nn::ReLU(),
-		    //torch::nn::Dropout(0.2),
-		    //torch::nn::Linear(1024, 1024),
-			//torch::nn::ReLU(),
-		    //torch::nn::Dropout(0.2),
-		    //torch::nn::Linear(1024, 1024),
-		    //torch::nn::ReLU(),
 		    // torch::nn::Dropout(0.2),
-		    //torch::nn::Linear(128, 64),
-		    //torch::nn::ReLU(),
-		    //torch::nn::Dropout(0.2),
-		    //torch::nn::Linear(64, n_out),
-			//torch::nn::ReLU(),
-		    torch::nn::Linear(128, 1)
-        ))
-          
-          // Critic
-	   // c_lin1_(torch::nn::Linear(n_in, 16)),
-	   // c_lin2_(torch::nn::Linear(16, 32)),
-	   //// c_lin3_(torch::nn::Linear(32, 16)),
-	   // c_lin4_(torch::nn::Linear(32, n_out)),
-    //      c_val_(torch::nn::Linear(n_out, 1)) 
-    {
+		    // torch::nn::Linear(1024, 1024),
+		    // torch::nn::ReLU(),
+		    // torch::nn::Dropout(0.2),
+		    // torch::nn::Linear(1024, 1024),
+		    // torch::nn::ReLU(),
+		    // torch::nn::Dropout(0.2),
+		    // torch::nn::Linear(1024, 1024),
+		    // torch::nn::ReLU(),
+		    // torch::nn::Dropout(0.2),
+		    // torch::nn::Linear(256, 128),
+		    // torch::nn::ReLU(),
+		    torch::nn::Linear(128, n_out) /*,
+			 torch::nn::Tanh()*/
+		    );
+		mu_ = torch::full(n_out, 0.);
+	    log_std_ = torch::full(n_out, std);
+		critic_network = torch::nn::Sequential(
+			torch::nn::Linear(n_in, 2048),
+			torch::nn::ReLU(),
+			// torch::nn::Dropout(0.2),
+			torch::nn::Linear(2048, 1024),
+			torch::nn::ReLU(),
+			// torch::nn::Dropout(0.2),
+			torch::nn::Linear(1024, 512),
+			torch::nn::ReLU(),
+			// torch::nn::Dropout(0.2),
+			torch::nn::Linear(512, 256),
+			torch::nn::ReLU(),
+			// torch::nn::Dropout(0.2),
+			torch::nn::Linear(256, 128),
+			torch::nn::ReLU(),
+			// torch::nn::Dropout(0.2),
+			// torch::nn::Linear(1024, 1024),
+			// torch::nn::ReLU(),
+			// torch::nn::Dropout(0.2),
+			// torch::nn::Linear(1024, 1024),
+			// torch::nn::ReLU(),
+			// torch::nn::Dropout(0.2),
+			// torch::nn::Linear(1024, 1024),
+			// torch::nn::ReLU(),
+			//  torch::nn::Dropout(0.2),
+			// torch::nn::Linear(128, 64),
+			// torch::nn::ReLU(),
+			// torch::nn::Dropout(0.2),
+			// torch::nn::Linear(64, n_out),
+			// torch::nn::ReLU(),
+			torch::nn::Linear(128, 1));
+
 	    //register_module("conv_layers", conv_layers);
 	    //register_module("scalar_fc_layers", scalar_fc_layers);
 	    register_module("actor_network", actor_network);
@@ -133,7 +137,6 @@ struct ActorCriticImpl : public torch::nn::Module
 	    try
 	    {
 		    mu_ = actor_network->forward(prepare_tensor(x));
-
 	    }
 	    catch(const std::exception &e)
 	    {
@@ -159,34 +162,59 @@ struct ActorCriticImpl : public torch::nn::Module
     }
 
     torch::Tensor extract_blocks_vectorized(
-	    const torch::Tensor &map_tensor,
-	    const torch::Tensor &coords,
+	    torch::Tensor &coords,
 	    int64_t block_size)
     {
+	    int64_t map_height = map_tensor.size(0);
+	    int64_t map_width = map_tensor.size(1);
+
 	    // Number of blocks to extract
 	    int64_t batch_size = coords.size(0);
 
-	    // Generate row indices
-	    auto x_range = torch::arange(0, block_size, map_tensor.device()).view({1, block_size, 1});
-	    auto x = coords.index({torch::arange(0, batch_size, torch::kLong).to(map_tensor.device()), 0})
-			     .view({batch_size, 1, 1}) +
-		     x_range;
+		coords = coords.to(torch::kLong);
 
-	    // Generate column indices
-	    auto y_range = torch::arange(0, block_size, map_tensor.device()).view({1, 1, block_size});
-	    auto y = coords.index({torch::arange(0, batch_size, torch::kLong).to(map_tensor.device()), 1})
+		auto shifted_coords = coords - (block_size / 2);
+
+		torch::TensorOptions options = torch::TensorOptions().dtype(torch::kLong).device(map_tensor.device());
+
+	    // Generate row indices
+		auto y_range = torch::arange(0, block_size, options).view({1, block_size, 1});
+		auto y = shifted_coords.index({torch::arange(0, batch_size, options), 1})
 			     .view({batch_size, 1, 1}) +
 		     y_range;
 
+		y = y.clamp(0, map_height - 1);
+
+	    // Generate column indices
+		auto x_range = torch::arange(0, block_size, options).view({1, 1, block_size});
+		auto x = shifted_coords.index({torch::arange(0, batch_size, options), 0})
+			     .view({batch_size, 1, 1}) +
+		     x_range;
+
+		x = x.clamp(0, map_width - 1);
+
+		//std::cout << x.sizes() << std::endl;
+
 	    // Perform advanced indexing to extract blocks
-	    auto blocks = map_tensor.index({x, y});
+	    auto blocks = map_tensor.index({y, x});
+		//std::cout << blocks.sizes() << std::endl;
 	    return blocks;
     }
 
 	// Prepare tensor
     auto prepare_tensor(torch::Tensor x) -> torch::Tensor
     {
-	    
+	    torch::Tensor cpy_inputs = x.index({"...", torch::indexing::Slice(0, 78)});
+
+		torch::Tensor coords = x.index({"...", torch::indexing::Slice(78, 80)});
+
+		torch::Tensor blocks = extract_blocks_vectorized(coords, 33).view({(long long)x.size(0), 33 * 33});
+
+	    // printf("UPDATING0.3\n");
+		torch::Tensor cpy_blocks = torch::one_hot(blocks.to(torch::kInt64), 3).to(torch::kF32).view({(long long)x.size(0), -1});
+		//std::cout << cpy_blocks.sizes() << std::endl;
+	    x = torch::cat({cpy_inputs, cpy_blocks}, 1);
+
 	    return x;
     }
 
@@ -216,6 +244,11 @@ struct ActorCriticImpl : public torch::nn::Module
 
 	    // Copy the log_std_ parameter
 	    log_std_ = other->log_std_.clone();
+		map_tensor = other->map_tensor.clone();
+	    if(!other->is_training())
+	    {
+		    this->eval();
+	    }
 		//printf("1\n");
 
 	    // Re-register the cloned modules and parameters
@@ -300,7 +333,8 @@ struct ActorCriticImpl : public torch::nn::Module
 		    torch::Tensor action;
 		    try
 		    {
-			    action = x + normal_presampled[used_presamples]; // at::normal(x, std);
+			    //at::manual_seed()
+			    action = at::normal(x, log_std_.exp().expand_as(x));
 			    used_presamples += 1;
 		    }
 		    catch(const std::exception &e)
@@ -339,6 +373,11 @@ struct ActorCriticImpl : public torch::nn::Module
         {
             p.normal_(mu,std);
         }         
+    }
+
+	void load_map(torch::Tensor map)
+    {
+		map_tensor = map.clone();
     }
 
 	/*void log_to_cpu()

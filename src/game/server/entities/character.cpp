@@ -830,6 +830,7 @@ void CCharacter::TickDeferred()
 	//	int Events = m_Core.m_TriggeredEvents;
 	//	int CID = m_pPlayer->GetCID();
 
+	//	int64_t SoloMask = (1 << CID);
 	//	int64_t TeamMask = Teams()->TeamMask(Team(), -1, CID);
 	//	// Some sounds are triggered client-side for the acting player
 	//	// so we need to avoid duplicating them

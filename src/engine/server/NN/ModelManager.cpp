@@ -14,7 +14,7 @@ int64_t n_in = 3345; // 78 + 1089 * 3
 int64_t n_scalar_in = 78;
 int64_t n_grid_channels = 3;
 int64_t n_out = 9;
-double stdrt = 2e-2;
+double stdrt = 2e-2; // Default: 2e-2
 double learning_rate = 5e-5; // Default: 5e-5
 double actor_learning_rate = 5e-5; // Default: 5e-5
 double critic_learning_rate = 2e-4; // Default: 1e-4
@@ -23,14 +23,14 @@ double critic_learning_rate = 2e-4; // Default: 1e-4
 int64_t mini_batch_size = 8000; // 4096, 8192, 16384, 32768
 int64_t count_mini_batches = 1;
 int64_t max_mini_batch_size = 8000; // 4096, 8192, 16384, 32768
-int64_t ppo_epochs = 1; // Default: 4
+int64_t ppo_epochs = 2; // Default: 4
 double dbeta = 1e-3; // Default: 1e-3
 double clip_param = 0.2; // Default: 0.2
 float gamma = 0.99f; // Default: 0.99f
 float lambda = 0.95f;
 
-ActorCritic ac_update(n_in, n_out, stdrt);
-ActorCritic ac_work(n_in, n_out, stdrt);
+ActorCritic ac_update;
+ActorCritic ac_work;
 std::shared_ptr<torch::optim::Adam> opt; //(ac->parameters(), 1e-2);
 //std::shared_ptr<torch::optim::Adam> actor_opt;
 //std::shared_ptr<torch::optim::Adam> ocritic;
@@ -85,30 +85,37 @@ void generate_random_hyperparameters()
 	return;
 }
 
-ModelManager::ModelManager(size_t batch_size, size_t count_players) :
+ModelManager::ModelManager(std::vector<unsigned char> &map_game_grid, int map_width, int map_height, size_t batch_size, size_t count_players, uint64_t seed) :
 	batch_size(batch_size), iReplaysPerBot(batch_size / count_players), count_bots(count_players)
 {
 	printf("CUDA is available: %d\n", torch::cuda::is_available());
 
+	torch::manual_seed(seed);
+
+	ac_update->Initialize(n_in, n_out, stdrt);
+	ac_work->Initialize(n_in, n_out, stdrt);
+
 	// Global Speedups
 	// Enable optimized cuDNN algorithms, works best with non-fluxuating input size, perfect for RL
 	// https://discuss.pytorch.org/t/what-does-torch-backends-cudnn-benchmark-do/5936
-	at::globalContext().setBenchmarkCuDNN(true);
+	//at::globalContext().setBenchmarkCuDNN(true);
 
-	// Use float32 tensor cores on Ampere GPUs, less precision for ~7x speedup
-	// https://pytorch.org/docs/stable/notes/cuda.html#tensorfloat-32-tf32-on-ampere-devices
-	at::globalContext().setAllowTF32CuBLAS(true);
-	at::globalContext().setAllowTF32CuDNN(true);
+	//// Use float32 tensor cores on Ampere GPUs, less precision for ~7x speedup
+	//// https://pytorch.org/docs/stable/notes/cuda.html#tensorfloat-32-tf32-on-ampere-devices
+	//at::globalContext().setAllowTF32CuBLAS(true);
+	//at::globalContext().setAllowTF32CuDNN(true);
 
-	// Used FP16 mixed precision
-	// https://pytorch.org/docs/stable/notes/cuda.html#reduced-precision-reduction-in-fp16-gemms
-	at::globalContext().setAllowFP16ReductionCuBLAS(true);
+	//// Used FP16 mixed precision
+	//// https://pytorch.org/docs/stable/notes/cuda.html#reduced-precision-reduction-in-fp16-gemms
+	//at::globalContext().setAllowFP16ReductionCuBLAS(true);
 
 	//net_module.eval();
 	//torch::set_num_threads(4);
 	//torch::set_num_interop_threads(4);
 	//generate_random_hyperparameters();
 	ac_update->to(precision);
+	torch::Tensor map_tensor = torch::from_blob(map_game_grid.data(), {map_height, map_width}, torch::kUInt8).to(device, true);
+	ac_update->load_map(map_tensor);
 	//ac->normal(0., stdrt);
 	//ac->eval();
 	//learning_rate = 1e-6;
@@ -158,23 +165,47 @@ ModelManager::ModelManager(size_t batch_size, size_t count_players) :
 	//critic_opt = std::make_shared<torch::optim::Adam>(ac->critic_parameters(), critic_learning_rate);
 	//opt = std::make_shared<torch::optim::Adam>(ac->parameters(), learning_rate);
 	opt = std::make_shared<torch::optim::Adam>(param_groups);
-	//torch::load(ac_update, "train\\1736171292641\\models\\last_model.pt");
-	//torch::load(*opt, "train\\1736171292641\\models\\last_optimizer.pt");
-	//scheduler = std::make_shared<torch::optim::ReduceLROnPlateauScheduler>(*opt, /* mode */ torch::optim::ReduceLROnPlateauScheduler::max, /* factor */ 0.2, /* patience */ 10);
+	//torch::load(ac_update, "train\\1736790518237\\models\\last_model.pt");
+	//torch::load(*opt, "train\\1736790518237\\models\\last_optimizer.pt");
+	// Input map tensor (e.g., 2D grid)
+	//auto map_tensor = torch::arange(1922 * 556, torch::kCUDA).view({556, 19222});
+
+	// Define coordinates for blocks to extract (3 examples for simplicity)
+	//auto coords = torch::tensor(
+	//	{{296, 146}}, // Starting points for 3 blocks
+	//	torch::dtype(torch::kLong).device(torch::kCUDA));
+
+	//// Block size
+	//int64_t block_size = 33;
+
+	////std::cout << map_tensor[1][1] << std::endl;
+
+	//// Extract blocks
+	//auto blocks = extract_blocks_vectorized(map_tensor, coords, block_size);
+
+	//// Move to CPU and print results for clarity
+	//blocks = blocks.to(torch::kCPU);
+	//std::cout << blocks << std::endl;
+	/*for(int i = 0; i < blocks.size(0); ++i)
+	{
+		std::cout << "Block " << i << ":\n"
+			  << blocks[i] << "\n";
+	}*/
+	scheduler = std::make_shared<torch::optim::ReduceLROnPlateauScheduler>(*opt, /* mode */ torch::optim::ReduceLROnPlateauScheduler::max, /* factor */ 0.5, /* patience */ 10);
 	//for(auto &param_group : opt->param_groups())
 	//{
 	//	std::cout << param_group.options().get_lr() << std::endl;
-	//	if(param_group.options().get_lr() == 3e-5)
+	//	if(param_group.options().get_lr() == actor_learning_rate)
 	//	{
 	//		printf("Setting\n");
 	//		param_group.options().set_lr(1e-5);
 	//		printf("Setted\n");
 	//	}
 
-	//	if(param_group.options().get_lr() == .00036)
+	//	if(param_group.options().get_lr() == critic_learning_rate)
 	//	{
 	//		printf("Setting\n");
-	//		param_group.options().set_lr(2e-4);
+	//		param_group.options().set_lr(5e-5);
 	//		printf("Setted\n");
 	//	}
 
@@ -189,23 +220,23 @@ ModelManager::ModelManager(size_t batch_size, size_t count_players) :
 	ac_update->to(device);
 	//Sleep(7000);
 	// opt(ac->parameters(), 1e-3);
-	//ac->eval();
+	//ac_update->eval();
+	printf("Copying...\n");
+	try
+	{
+		ac_work->copy_from(ac_update.get());
+		//*opt_work = *opt_update->load(;
+	}
+	catch(const std::exception &e)
+	{
+		std::cout << "ac_work->copy_from crashed with reason: " << e.what() << std::endl;
+		exit(1);
+	}
+	printf("Copied.\n");
 	if(ac_update->is_training())
 	{
 		PPO::Initilize(batch_size, count_bots);
-		printf("Copying...\n");
-		try
-		{
-			ac_work->copy_from(ac_update.get());
-			//*opt_work = *opt_update->load(;
-		}
-		catch(const std::exception &e)
-		{
-			std::cout << "ac_work->copy_from crashed with reason: " << e.what() << std::endl;
-			exit(1);
-		}
-		printf("Copied.\n");
-		ac_work->presample_normal(iReplaysPerBot * 1.5, count_bots);
+		//ac_work->presample_normal(iReplaysPerBot * 1.5, count_bots);
 		cout << "Learning rate: " << learning_rate << " Gamma: " << gamma << " Beta: " << dbeta << " clip_param: " << clip_param << " Epochs: " << ppo_epochs << " Mini batch size: " << mini_batch_size << endl;
 	}
 	//at::cuda::setCurrentCUDAStream(myStream);
@@ -213,7 +244,6 @@ ModelManager::ModelManager(size_t batch_size, size_t count_players) :
 
 std::vector<ModelOutput> ModelManager::Decide(
 	std::vector<ModelInputInputs> &input_inputs,
-	std::vector<ModelInputBlocks> &input_blocks,
 	double &time_pre_forward,
 	double &time_forward,
 	double &time_normal,
@@ -227,21 +257,20 @@ std::vector<ModelOutput> ModelManager::Decide(
 	std::vector<ModelOutput> outputs;
 
 	//printf("Count: %i\n", (int)input.size());
-	torch::Tensor state_inputs_cpu = torch::from_blob(input_inputs.data(), {(long long)input_inputs.size(), sizeof(ModelInputInputs) / 4}, torch::kF32).to(precision);
-	torch::Tensor blocks_input_cpu = torch::from_blob(input_blocks.data(), {(long long)input_blocks.size(), sizeof(ModelInputBlocks) / sizeof(long long)}, torch::kInt64);
+	torch::Tensor state_cpu = torch::from_blob(input_inputs.data(), {(long long)input_inputs.size(), sizeof(ModelInputInputs) / 4}, torch::kF32).to(precision);
 	// printf("1\n");
 	//std::memcpy(state.data_ptr(), &(input), sizeof(input));
-	auto blocks_input_gpu = blocks_input_cpu.to(device, true);
-	auto state_inputs_gpu = state_inputs_cpu.to(device, true);
+	//auto blocks_input_gpu = blocks_input_cpu.to(device, true);
+	auto state_gpu = state_cpu.to(device, true);
 	
 	//printf("1.1\n");
-	auto one_hotted_blocks = torch::one_hot(blocks_input_gpu, n_grid_channels);
+	//auto one_hotted_blocks = torch::one_hot(blocks_input_gpu, n_grid_channels);
 	//printf("1.2\n");
-	one_hotted_blocks = one_hotted_blocks.to(precision);
+	//one_hotted_blocks = one_hotted_blocks.to(precision);
 	//printf("1.3\n");
-	one_hotted_blocks = one_hotted_blocks.view({(long long)input_inputs.size(), -1});
+	//one_hotted_blocks = one_hotted_blocks.view({(long long)input_inputs.size(), -1});
 	//printf("1.4\n");
-	torch::Tensor state_forward = torch::cat({state_inputs_gpu, one_hotted_blocks}, 1);
+	//torch::Tensor state_forward = torch::cat({state_inputs_gpu, one_hotted_blocks}, 1);
 	//printf("2\n");
 	//states.push_back(state);
 	//  Play.
@@ -252,7 +281,7 @@ std::vector<ModelOutput> ModelManager::Decide(
 	time_pre_forward = std::chrono::duration<double>(now - decide_time).count() * 1000.;
 	//std::cout << "Time to allocate and transfer: " << std::chrono::duration<double>(now - decide_time).count() << std::endl;
 	decide_time = std::chrono::high_resolution_clock::now();
-	auto av = ac_work->actor_forward(state_forward);
+	auto av = ac_work->actor_forward(state_gpu);
 	//at::cuda::getCurrentCUDAStream().synchronize();
 
 	now = std::chrono::high_resolution_clock::now();
@@ -260,7 +289,7 @@ std::vector<ModelOutput> ModelManager::Decide(
 	decide_time = std::chrono::high_resolution_clock::now();
 
 	//printf("2.1\n");
-	if(!validating)
+	if(!validating && ac_work->is_training())
 	{
 		av = ac_work->normal_actor(av);
 	}
@@ -309,8 +338,8 @@ std::vector<ModelOutput> ModelManager::Decide(
 	//std::cout << "Time to .to: " << (float)(std::chrono::duration_cast<std::chrono::nanoseconds>(now - decide_time).count()) / (float)std::chrono::nanoseconds(1s).count() << std::endl;
 	//printf("pre1\n");
 
-	auto tActions_cpu = av.clone().to(torch::kCPU, true); // tActions.to(torch::kCPU) av
-	torch::Tensor state_gpu = torch::cat({state_inputs_gpu, blocks_input_gpu}, 1);
+	auto tActions_cpu = av.clone().to(torch::kCPU); // tActions.to(torch::kCPU) av
+	//torch::Tensor state_gpu = torch::cat({state_inputs_gpu, blocks_input_gpu}, 1);
 	//auto decide_time = std::chrono::high_resolution_clock::now();
 	if(ac_work->is_training() && !validating)
 	{
@@ -347,7 +376,7 @@ std::vector<ModelOutput> ModelManager::Decide(
 	auto hook_indices = torch::argmax(hooks, 1);
 	//printf("4\n");
 	auto jumps = tActions_cpu.index({torch::indexing::Slice(), torch::indexing::Slice(7, 9)});
-	auto jump_indices = torch::argmax(hooks, 1);
+	auto jump_indices = torch::argmax(jumps, 1);
 	
 	//printf("5\n");
 	auto angle_x_vec = angle_x.accessor<float, 1>(); // at::Half float
@@ -585,6 +614,18 @@ void ModelManager::Reward(float reward, bool done)
 	return;
 }
 
+void ModelManager::ErasePlayerReplays(int id)
+{
+	if(!ac_work->is_training())
+	{
+		return;
+	}
+
+	PPO::erase_player_replays(id);
+
+	return;
+}
+
 void ModelManager::SaveReplays(bool& is_full)
 {
 	if(!ac_work->is_training())
@@ -636,7 +677,7 @@ size_t ModelManager::GetCountEpisodes()
 	return PPO::count_of_episodes();
 }
 
-void ModelManager::Update(double avg_reward, int episodes, bool &updated, double &avg_training_loss, double &avg_actor_loss, double &avg_critic_loss)
+void ModelManager::Update(double avg_reward, int episodes, bool spawn_probabilities_updated, bool &updated, double &avg_training_loss, double &avg_actor_loss, double &avg_critic_loss)
 {
 	// Update.
 	//printf("Updating the network.\n");
@@ -734,9 +775,11 @@ void ModelManager::Update(double avg_reward, int episodes, bool &updated, double
 		updated = true;
 		count_mini_batches = 1;
 	}
-
-	//scheduler->step(avg_reward);
-	ac_work->presample_normal(iReplaysPerBot * 1.5, count_bots);
+	if(spawn_probabilities_updated)
+	{
+		scheduler->step(avg_reward);
+	}
+	//ac_work->presample_normal(iReplaysPerBot * 1.5, count_bots);
 	/*for(auto &group : opt->param_groups())
 	{
 		auto lr = group.options().get_lr();
