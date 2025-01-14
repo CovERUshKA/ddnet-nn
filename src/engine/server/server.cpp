@@ -2935,7 +2935,7 @@ int CServer::Run()
 			// snap game
 			if(NewTicks)
 			{
-				if((Config()->m_SvHighBandwidth || (m_CurrentGameTick % 2) == 0) && m_aDemoRecorder[0].IsRecording())
+				if((Config()->m_SvHighBandwidth || (m_CurrentGameTick % 2) == 0) && m_aDemoRecorder[MAX_CLIENTS].IsRecording())
 					DoSnapshot();
 
 				UpdateClientRconCommands();

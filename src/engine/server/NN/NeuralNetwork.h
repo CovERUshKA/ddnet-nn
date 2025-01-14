@@ -7,7 +7,6 @@
 #include <game/server/entities/character.h>
 #include <game/mapitems.h>
 #include "ModelManager.h"
-#include "AStar.h"
 #include <fstream>
 
 class CNeuralNetwork : public IInterface
@@ -32,34 +31,20 @@ class CNeuralNetwork : public IInterface
 	std::mt19937 gen;
 	std::discrete_distribution<> spawn_probabilities_distribution;
 
-	std::vector<vec2> vSpawnPoints;
-	std::vector<std::pair<int, int>> vFinishPoses;
-	std::vector<std::vector<int>> pathfinding_grid;
-	std::vector<unsigned char> map_game_grid;
-
-	std::vector<float> vSpawnCumulativeReward;
-	std::vector<int> vSpawnLives;
-	std::vector<float> vSpawnProbabilities;
-
 	int count_bots;
+	int count_teams;
+	int count_player_bots;
 	std::vector<CPlayer *> vBots;
-	std::vector<std::vector<std::pair<int, int>>> vBotsPath;
 	std::vector<vec2> vBotLastPos;
 	std::vector<float> vBotLastVel;
-	std::vector<int> vBotsSpawnPos;
-	//std::vector<int> vBotsValidateSpawnPoint;
-	std::vector<vec2> vBotsLastCheckPoint;
+	//std::vector<int> vBotsSpawnPos;
+	//std::vector<float> vBotsCumulativeRewardBetweenSkipTick;
 	std::vector<float> vBotsCumulativeRewards;
 	std::vector<ModelInputInputs> vInputInputs;
-	//std::vector<ModelInputBlocks> vInputBlocks;
 	std::vector<ModelOutput> vOutputs;
-	//std::vector<bool> vIsPreviouslyHooked;
-	//std::vector<vec2> vPrevHookPos;
 
 	// First is distance, second is tick
-	std::vector<std::pair<int, int>> vBotBestDistance;
-
-	AStar *astar;
+	//std::vector<std::pair<int, int>> vBotBestDistance;
 
 	ModelManager* model_manager;
 
@@ -100,5 +85,5 @@ public:
 	void PreOnClientPredictedEarlyInput();
 	void PreOnClientPredictedInput();
 
-	CPlayer *AddBot(const char *Name);
+	CPlayer *AddBot(const char *name, vec2 spawn_pos);
 }; // namespace NeuralNetwork

@@ -172,7 +172,7 @@ private:
 	void HandleTuneLayer();
 
 	CTuningParams *CharacterTuning();
-
+	
 	int m_StrongWeakID;
 
 	int m_LastWeaponSwitchTick;

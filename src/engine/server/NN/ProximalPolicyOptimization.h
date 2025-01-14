@@ -52,9 +52,9 @@ public:
 	{
 		//dones.resize(capacity);
 		//rewards.resize(capacity);
-		states = torch::empty({(long long)capacity, 80}, torch::kCUDA);
-		actions = torch::empty({(long long)capacity, 9}, torch::kCUDA);
-		log_probs = torch::empty({(long long)capacity, 9}, torch::kCUDA);
+		states = torch::empty({(long long)capacity, 33}, torch::kCUDA);
+		actions = torch::empty({(long long)capacity, 7}, torch::kCUDA);
+		log_probs = torch::empty({(long long)capacity, 7}, torch::kCUDA);
 		values = torch::empty({(long long)capacity, 1}, torch::kCUDA);
 		returns = torch::empty({(long long)capacity, 1}, torch::kCUDA);
 		//v_all_indices.resize(capacity);

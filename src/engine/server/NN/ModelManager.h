@@ -12,6 +12,8 @@ struct ModelInputInputs
 
 	// Position of the player in the area
 	vec2 bot_pos;
+	// Indicates whether the bot is out of area
+	float bot_is_out_of_area;
 	// Velocity of the bot by x and y axis
 	vec2 bot_vel;
 
@@ -36,6 +38,8 @@ struct ModelInputInputs
 	
 	// Position of the enemy in the area
 	vec2 enemy_pos;
+	// Indicates whether the enemy is out of area
+	float enemy_is_out_of_area;
 	// Velocity of the enemy by x and y axis
 	vec2 enemy_vel;
 
@@ -51,12 +55,16 @@ struct ModelInputInputs
 	vec2 enemy_hook_pos;
 	// Direction the hook is going
 	vec2 enemy_hook_dir;
+	// Hook angle according to the enemy tee at the moment
+	vec2 enemy_hook_angle;
 
 	//
 	// Ball
 	//
 	// Position of the ball in the area
 	vec2 ball_pos;
+	// Indicates whether the ball is out of area
+	float ball_is_out_of_area;
 	// Velocity of the enemy by x and y axis
 	vec2 ball_vel;
 };
@@ -76,7 +84,7 @@ struct ModelOutput
 struct ModelManager
 {
 	int count_bots, iReplaysPerBot, batch_size;
-	ModelManager(std::vector<unsigned char> &map_game_grid, int map_width, int map_height, size_t batch_size, size_t count_players, uint64_t seed);
+	ModelManager(size_t batch_size, size_t count_players, uint64_t seed);
 
 	//ModelOutput Decide(ModelInputInputs &input);
 	std::vector<ModelOutput> Decide(
@@ -93,7 +101,7 @@ struct ModelManager
 	void SaveReplays(bool &is_full);
 	void ErasePlayerReplays(int id);
 
-	void Update(double avg_reward, int dies, bool spawn_probabilities_updated, bool &updated, double &avg_training_loss, double &avg_actor_loss, double &avg_critic_loss);
+	void Update(double avg_reward, int dies, bool &updated, double &avg_training_loss, double &avg_actor_loss, double &avg_critic_loss);
 
 	void Save(std::string filename);
 

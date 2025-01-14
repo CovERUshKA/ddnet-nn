@@ -10,10 +10,8 @@
 #include <c10/cuda/CUDAGuard.h>
 #include <torch/optim/schedulers/reduce_on_plateau_scheduler.h>
 
-int64_t n_in = 3345; // 78 + 1089 * 3
-int64_t n_scalar_in = 78;
-int64_t n_grid_channels = 3;
-int64_t n_out = 9;
+int64_t n_in = 33; // 78 + 1089 * 3
+int64_t n_out = 7;
 double stdrt = 2e-2; // Default: 2e-2
 double learning_rate = 5e-5; // Default: 5e-5
 double actor_learning_rate = 5e-5; // Default: 5e-5
@@ -85,7 +83,7 @@ void generate_random_hyperparameters()
 	return;
 }
 
-ModelManager::ModelManager(std::vector<unsigned char> &map_game_grid, int map_width, int map_height, size_t batch_size, size_t count_players, uint64_t seed) :
+ModelManager::ModelManager(size_t batch_size, size_t count_players, uint64_t seed) :
 	batch_size(batch_size), iReplaysPerBot(batch_size / count_players), count_bots(count_players)
 {
 	printf("CUDA is available: %d\n", torch::cuda::is_available());
@@ -109,30 +107,10 @@ ModelManager::ModelManager(std::vector<unsigned char> &map_game_grid, int map_wi
 	//// https://pytorch.org/docs/stable/notes/cuda.html#reduced-precision-reduction-in-fp16-gemms
 	//at::globalContext().setAllowFP16ReductionCuBLAS(true);
 
-	//net_module.eval();
 	//torch::set_num_threads(4);
 	//torch::set_num_interop_threads(4);
 	//generate_random_hyperparameters();
 	ac_update->to(precision);
-	torch::Tensor map_tensor = torch::from_blob(map_game_grid.data(), {map_height, map_width}, torch::kUInt8).to(device, true);
-	ac_update->load_map(map_tensor);
-	//ac->normal(0., stdrt);
-	//ac->eval();
-	//learning_rate = 1e-6;
-	//torch::optim::AdamOptions opts(learning_rate);
-	//opts.weight_decay(weight_decay);
-	//std::vector<torch::optim::AdamOptions> options = {torch::optim::AdamOptions(actor_learning_rate), torch::optim::AdamOptions(critic_learning_rate)};
-	//std::vector<torch::optim::OptimizerParamGroup> params;
-	// Create parameter groups
-	//printf("1\n");
-	//torch::optim::OptimizerOptions critic_options;
-	//critic_options.set_lr(critic_learning_rate);
-	//torch::optim::AdamOptions options;
-	//torch::optim::OptimizerParamGroup actor_group(ac->actor_network->parameters());
-	//torch::optim::OptimizerParamGroup critic_group(ac->critic_network->parameters());
-	//printf("1\n");
-	// Create the first parameter group with drive_db_
-	//std::vector<torch::Tensor> params1 = {drive_db_};
 
 	// Initialize the Adam optimizer with the parameter group
 	std::vector<torch::optim::OptimizerParamGroup> param_groups;
@@ -144,53 +122,9 @@ ModelManager::ModelManager(std::vector<unsigned char> &map_game_grid, int map_wi
 	param_groups.push_back(torch::optim::OptimizerParamGroup({ac_update->log_std_},
 		std::make_unique<torch::optim::AdamOptions>(actor_learning_rate)));
 
-	// Set different learning rates for each group
-	//static_cast<torch::optim::AdamOptions &>(actor_group.options()).lr(actor_learning_rate);
-	//actor_group.options().set_lr(actor_learning_rate);
-	//printf("1\n");
-	//static_cast<torch::optim::AdamOptions &>(critic_group.options()).lr(critic_learning_rate);
-	//critic_group.options().set_lr(critic_learning_rate);
-	//printf("1\n");
-
-	// Create a vector of parameter groups
-	//std::vector<torch::optim::OptimizerParamGroup> param_groups = {actor_group, critic_group};
-	//printf("1\n");
-
-	// Create the optimizer with parameter groups
-	/*torch::optim::Adam optimizer({actor_group,
-		critic_group});*/
-	/*params.push_back(ac->actor_network->parameters());
-	params.push_back(ac->critic_network->parameters());*/
-	//actor_opt = std::make_shared<torch::optim::Adam>(ac->actor_parameters(), actor_learning_rate);
-	//critic_opt = std::make_shared<torch::optim::Adam>(ac->critic_parameters(), critic_learning_rate);
-	//opt = std::make_shared<torch::optim::Adam>(ac->parameters(), learning_rate);
 	opt = std::make_shared<torch::optim::Adam>(param_groups);
 	//torch::load(ac_update, "train\\1736790518237\\models\\last_model.pt");
 	//torch::load(*opt, "train\\1736790518237\\models\\last_optimizer.pt");
-	// Input map tensor (e.g., 2D grid)
-	//auto map_tensor = torch::arange(1922 * 556, torch::kCUDA).view({556, 19222});
-
-	// Define coordinates for blocks to extract (3 examples for simplicity)
-	//auto coords = torch::tensor(
-	//	{{296, 146}}, // Starting points for 3 blocks
-	//	torch::dtype(torch::kLong).device(torch::kCUDA));
-
-	//// Block size
-	//int64_t block_size = 33;
-
-	////std::cout << map_tensor[1][1] << std::endl;
-
-	//// Extract blocks
-	//auto blocks = extract_blocks_vectorized(map_tensor, coords, block_size);
-
-	//// Move to CPU and print results for clarity
-	//blocks = blocks.to(torch::kCPU);
-	//std::cout << blocks << std::endl;
-	/*for(int i = 0; i < blocks.size(0); ++i)
-	{
-		std::cout << "Block " << i << ":\n"
-			  << blocks[i] << "\n";
-	}*/
 	scheduler = std::make_shared<torch::optim::ReduceLROnPlateauScheduler>(*opt, /* mode */ torch::optim::ReduceLROnPlateauScheduler::max, /* factor */ 0.5, /* patience */ 10);
 	//for(auto &param_group : opt->param_groups())
 	//{
@@ -374,9 +308,6 @@ std::vector<ModelOutput> ModelManager::Decide(
 	// Process hooks
 	auto hooks = tActions_cpu.index({torch::indexing::Slice(), torch::indexing::Slice(5, 7)});
 	auto hook_indices = torch::argmax(hooks, 1);
-	//printf("4\n");
-	auto jumps = tActions_cpu.index({torch::indexing::Slice(), torch::indexing::Slice(7, 9)});
-	auto jump_indices = torch::argmax(jumps, 1);
 	
 	//printf("5\n");
 	auto angle_x_vec = angle_x.accessor<float, 1>(); // at::Half float
@@ -386,8 +317,6 @@ std::vector<ModelOutput> ModelManager::Decide(
 	auto direction_indices_vec = direction_indices.accessor<int64_t, 1>();
 	//printf("8\n");
 	auto hook_indices_vec = hook_indices.accessor<int64_t, 1>();
-	//printf("9\n");
-	auto jump_indices_vec = jump_indices.accessor<int64_t, 1>();
 	
 	//decide_time = std::chrono::steady_clock::now();
 	//float time_sum = 0;
@@ -411,7 +340,6 @@ std::vector<ModelOutput> ModelManager::Decide(
 		// std::cout << output.angle[0] << std::endl;
 		// printf("8\n");
 		output.hook = static_cast<bool>(hook_indices_vec[i]);
-		output.jump = static_cast<bool>(jump_indices_vec[i]);
 		// printf("9\n");
 		outputs.push_back(output);
 
@@ -677,7 +605,7 @@ size_t ModelManager::GetCountEpisodes()
 	return PPO::count_of_episodes();
 }
 
-void ModelManager::Update(double avg_reward, int episodes, bool spawn_probabilities_updated, bool &updated, double &avg_training_loss, double &avg_actor_loss, double &avg_critic_loss)
+void ModelManager::Update(double avg_reward, int episodes, bool &updated, double &avg_training_loss, double &avg_actor_loss, double &avg_critic_loss)
 {
 	// Update.
 	//printf("Updating the network.\n");
@@ -775,10 +703,7 @@ void ModelManager::Update(double avg_reward, int episodes, bool spawn_probabilit
 		updated = true;
 		count_mini_batches = 1;
 	}
-	if(spawn_probabilities_updated)
-	{
-		scheduler->step(avg_reward);
-	}
+	scheduler->step(avg_reward);
 	//ac_work->presample_normal(iReplaysPerBot * 1.5, count_bots);
 	/*for(auto &group : opt->param_groups())
 	{

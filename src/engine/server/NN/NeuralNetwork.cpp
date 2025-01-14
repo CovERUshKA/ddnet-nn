@@ -20,6 +20,7 @@
 #include <game/server/gamecontroller.h>
 #include <engine/map.h>
 #include "engine/server/server.h"
+#include <game/server/gamemodes/DDRace.h>
 
 #include <numeric>
 //#include <iostream>
@@ -30,15 +31,29 @@ CServer *m_pServer;
 IStorage *m_pStorage;
 IConsole *m_pConsole;
 CGameContext *m_pGameContext;
+CGameControllerDDRace *m_pController;
 
-CPlayer *CNeuralNetwork::AddBot(const char *Name)
+vec2 first_bot_spawn_pos = {28.5 * 32.f, 20.5 * 32.f};
+vec2 second_bot_spawn_pos = {34.5 * 32.f, 20.5 * 32.f};
+vec2 ball_spawn_pos = {24.5 * 32.f, 24.5 * 32.f};
+
+vec2 volleyball_area_start = {160 * 32.f, 98 * 32.f};
+vec2 volleyball_area_end = {187 * 32.f, 119 * 32.f};
+vec2 volleyball_area_sizes = volleyball_area_end - volleyball_area_start;
+vec2 volleyball_area_center = (volleyball_area_start + volleyball_area_end) / 2.f;
+vec2 volleyball_area_left_side = (volleyball_area_start + volleyball_area_end) / 2.f;
+vec2 volleyball_area_right_side = (volleyball_area_start + volleyball_area_end) / 2.f;
+
+vec2 volleyball_final_area_right_top_corner = {67 * 32.f, 60 * 32.f};
+
+CPlayer *CNeuralNetwork::AddBot(const char *name, vec2 spawn_pos)
 {
 	for(int ClientID = MAX_CLIENTS - 1; ClientID >= 0; ClientID--)
 	{
 		if(m_pServer->m_aClients[ClientID].m_State == CServer::CClient::STATE_EMPTY)
 		{
 			// m_aClients[ClientID].m_aName = "Bot";
-			memcpy(m_pServer->m_aClients[ClientID].m_aName, Name, strlen(Name) + 1);
+			memcpy(m_pServer->m_aClients[ClientID].m_aName, name, strlen(name) + 1);
 
 			m_pServer->m_aClients[ClientID].m_State = CServer::CClient::STATE_INGAME;
 			m_pServer->m_aClients[ClientID].m_SnapRate = CServer::CClient::SNAPRATE_FULL;
@@ -50,11 +65,7 @@ CPlayer *CNeuralNetwork::AddBot(const char *Name)
 
 			CPlayer *pPlayer = m_pGameContext->m_apPlayers[ClientID];
 			pPlayer->SetAfk(false);
-			pPlayer->TryRespawn();
-
-			/*char aFilename[IO_MAX_PATH_LENGTH];
-			str_format(aFilename, sizeof(aFilename), "demos/%s_%d_%d_%llu.demo", m_aCurrentMap, m_NetServer.Address().port, ClientID, time_get());
-			m_aDemoRecorder[ClientID].Start(Storage(), Console(), aFilename, GameServer()->NetVersion(), m_aCurrentMap, &m_aCurrentMapSha256[MAP_TYPE_SIX], m_aCurrentMapCrc[MAP_TYPE_SIX], "server", m_aCurrentMapSize[MAP_TYPE_SIX], m_apCurrentMapData[MAP_TYPE_SIX]);*/
+			pPlayer->TryRespawn(spawn_pos);
 
 			return pPlayer;
 		}
@@ -69,11 +80,7 @@ void CNeuralNetwork::OnInit()
 	m_pStorage = Kernel()->RequestInterface<IStorage>();
 	m_pConsole = Kernel()->RequestInterface<IConsole>();
 	m_pGameContext = (CGameContext *)Kernel()->RequestInterface<IGameServer>();
-
-	//validated = false;
-	//validating = false;
-	//validating_dones = 0;
-
+	m_pController = (CGameControllerDDRace *)m_pGameContext->m_pController;
 
 	unsigned int Seed = 3112; // 3112
 
@@ -87,78 +94,16 @@ void CNeuralNetwork::OnInit()
 	spawn_probabilities_updated = false;
 
 	skip_tick = 3;
-	count_bots = 128;
+	count_teams = 42;
+	count_bots = count_teams * 3;
+	count_player_bots = count_teams * 2;
 	available_ticks_to_store = 1024000;
-	count_ticks = available_ticks_to_store / count_bots;
+	count_ticks = available_ticks_to_store / count_player_bots;
 	update_tick = count_ticks * skip_tick;
 	ticks_collected = last_update_tick = 0;
 
 	const CMapItemLayerTilemap *pTileMap = m_pGameContext->Layers()->GameLayer();
 	const CTile *pTiles = static_cast<CTile *>(Kernel()->RequestInterface<IMap>()->GetData(pTileMap->m_Data));
-
-	map_game_grid.resize(pTileMap->m_Height * pTileMap->m_Width);
-	pathfinding_grid.resize(pTileMap->m_Height);
-
-	for(int y = 0; y < pTileMap->m_Height; y++)
-	{
-		pathfinding_grid[y].resize(pTileMap->m_Width);
-		for(int x = 0; x < pTileMap->m_Width; x++)
-		{
-			const int Index = y * pTileMap->m_Width + x;
-			const int GameIndex = pTiles[Index].m_Index - ENTITY_OFFSET;
-			unsigned char TileIndex = pTiles[Index].m_Index;
-			map_game_grid[Index] = TileIndex;
-
-			// For map game grid to neural network
-			switch(TileIndex)
-			{
-			case 1:
-				map_game_grid[Index] = 1;
-				break;
-			case 9:
-				map_game_grid[Index] = 2;
-				break;
-			default:
-				map_game_grid[Index] = 0;
-				break;
-			}
-
-			// For path finding
-			switch(TileIndex)
-			{
-			case 1:
-			case 2:
-			case 3:
-			case 9:
-				pathfinding_grid[y][x] = 1;
-				break;
-			default:
-				break;
-			}
-
-			if(pTiles[Index].m_Index == 34)
-			{
-				vFinishPoses.push_back({y, x});
-			}
-
-			// Game layer
-			{
-				const vec2 Pos(x * 32.0f + 16.0f, y * 32.0f + 16.0f);
-
-				if(pTiles[Index].m_Index >= ENTITY_OFFSET && pTiles[Index].m_Index - ENTITY_OFFSET == ENTITY_SPAWN)
-				{
-					vSpawnPoints.push_back(Pos);
-				}
-			}
-		}
-	}
-	
-	//printf("Creating pathfinder...\n");
-	dbg_msg("neuralnetwork", "Creating pathfinder...");
-	astar = new AStar(pathfinding_grid, vFinishPoses);
-	//printf("Pathfinder created.\n");
-	dbg_msg("neuralnetwork", "Pathfinder created.");
-
 
 	//printf("Creating train directory with folders...\n");
 	dbg_msg("neuralnetwork", "Creating train directory with folders...");
@@ -188,88 +133,56 @@ void CNeuralNetwork::OnInit()
 		dbg_msg("neuralnetwork", "Can't make demos directory");
 		exit(1);
 	}
-
-	//printf("Train directory with folders created.\n");
 	dbg_msg("neuralnetwork", "Train directory with folders created.");
 
-	// std::pair<int, int> start = {4, 4};
-	// std::pair<int, int> goal = {4, 62};
-
-	// std::vector<std::pair<int, int>> path = a_star(start, goal, pathfinding_grid);
-
-	// if(!path.empty())
-	//{
-	//	std::cout << "Path found:\n";
-	//	for(const auto &step : path)
-	//	{
-	//		std::cout << "(" << step.first << ", " << step.second << ")\n";
-	//		pathfinding_grid[step.first][step.second] = 2;
-	//	}
-	// }
-	// else
-	//{
-	//	std::cout << "No path found.\n";
-	// }
-
-	//// Display grid for pathfinding algorithm
-	// for(size_t y = 0; y < pathfinding_grid.size(); y++)
-	//{
-	//	for(size_t x = 0; x < pathfinding_grid[y].size() / 2; x++)
-	//	{
-	//		cout << pathfinding_grid[y][x];
-	//	}
-	//	cout << endl;
-	// }
-
-	vSpawnCumulativeReward.resize(vSpawnPoints.size());
-	vSpawnLives.resize(vSpawnPoints.size());
-	vSpawnProbabilities.resize(vSpawnPoints.size(), 1);
-
-	spawn_probabilities_distribution = std::discrete_distribution<>(vSpawnProbabilities.begin(), vSpawnProbabilities.end());
-	//printf("Adding bots...\n");
 	dbg_msg("neuralnetwork", "Adding bots...");
-
-	// auto bot = AddBot("Bot");
-	// auto bot_2 = AddBot("Bot2");
-
-
-	if(count_bots)
+	if(count_teams)
 	{
-		vBotLastPos.resize(count_bots);
-		vBotLastVel.resize(count_bots);
-		vBotsPath.resize(count_bots);
-		vInputInputs.resize(count_bots);
+		vBotLastPos.resize(count_player_bots);
+		vBotLastVel.resize(count_player_bots);
+		vInputInputs.resize(count_player_bots);
 		//vInputBlocks.resize(count_bots);
-		vOutputs.resize(count_bots);
+		vOutputs.resize(count_player_bots);
 		//vIsPreviouslyHooked.resize(count_bots);
 		//vPrevHookPos.resize(count_bots);
-		vBotsSpawnPos.resize(count_bots);
+		//vBotsSpawnPos.resize(count_bots);
 		//vBotsValidateSpawnPoint.resize(count_bots);
-		vBotsLastCheckPoint.resize(count_bots);
-		vBotsCumulativeRewards.resize(count_bots);
-		vBotBestDistance.resize(count_bots);
+		//vBotsLastCheckPoint.resize(count_bots);
+		vBotsCumulativeRewards.resize(count_player_bots);
+		//vBotBestDistance.resize(count_player_bots);
 
 		for(size_t i = 0; i < count_bots; i++)
 		{
-			std::string name = "Bot" + to_string(i);
-			auto bot = AddBot(name.c_str());
-			int iSpawnPoint = spawn_probabilities_distribution(gen);
-			//auto decide_time = time_get_impl();
-			auto spawn_point_pos = std::pair<int, int>((int)vSpawnPoints[iSpawnPoint].y / 32, (int)vSpawnPoints[iSpawnPoint].x / 32);
-			vBotsPath[i] = astar->findPath(spawn_point_pos, 30);
-			//auto now = time_get_impl();
-			//cout << "Time to find: " << (float)(now - decide_time) / (float)time_freq() << " Length: " << vBotsPath[i].size() << endl;
-			bot->KillCharacter();
-			bot->TryRespawn(vSpawnPoints[iSpawnPoint]);
-			bot->GetCharacter()->SetSolo(true);
+			bool is_ball = false;
+			int team_id = i / 3 + 1;
+
+			std::string name;
+			vec2 spawn_pos;
+
+			if (i % 3 == 2)
+			{
+				name = "Ball";
+				spawn_pos = ball_spawn_pos;
+				is_ball = true;
+			}
+			else
+			{
+				name = "Bot";
+				spawn_pos = i % 3 == 0 ? first_bot_spawn_pos : second_bot_spawn_pos;
+			}
+
+			name += to_string(i);
+
+			auto bot = AddBot(name.c_str(), spawn_pos);
+			m_pController->m_Teams.SetForceCharacterTeam(bot->GetCID(), team_id);
+			bot->GetCharacter()->m_TeleCheckpoint = i % 3 + 1;
+			if(is_ball)
+			{
+				m_pController->m_Teams.SetTeamLock(team_id, true);
+			}
+
 			vBots.push_back(bot);
-			vBotsLastCheckPoint[i] = bot->GetCharacter()->m_Pos;
-			vBotsSpawnPos[i] = iSpawnPoint;
-			//vBotsValidateSpawnPoint[i] = spawn_probabilities_distribution(gen);
-			vSpawnLives[iSpawnPoint] += 1;
-			vBotBestDistance[i] = {astar->distanceToGoal(spawn_point_pos), 0};
-			// auto tr = std::thread(RunNNForward, &model_manager, i, &vEvents, &vFinishEvents, &vInputs, &vOutputs);
-			// tr.detach();
+
 			if (!model_manager->IsTraining())
 			{
 				char aFilename[IO_MAX_PATH_LENGTH];
@@ -279,30 +192,21 @@ void CNeuralNetwork::OnInit()
 			}
 		}
 	}
-	//printf("Bots added\n");
+
 	dbg_msg("neuralnetwork", "Bots added");
 
-	//printf("Initializing neural model...\n");
 	dbg_msg("neuralnetwork", "Initializing neural model...");
-	model_manager = new ModelManager(map_game_grid, pTileMap->m_Width, pTileMap->m_Height, count_bots * update_tick / skip_tick, count_bots, Seed);
+	model_manager = new ModelManager(count_player_bots * update_tick / skip_tick, count_player_bots, Seed);
 	dbg_msg("neuralnetwork", "Model initialized.");
 
 	dbg_msg("neuralnetwork", "Creating data.csv file for statistics...");
-	//printf("Creating data.csv file for statistics...\n");
 	{
 		char aFilename[IO_MAX_PATH_LENGTH];
-		/*std::cout << model_manager.GetLearningRate() << std::endl;à
-		std::cout << model_manager.GetMiniBatchSize() << std::endl;
-		std::cout << model_manager.GetCountPPOEpochs() << std::endl;
-		std::cout << count_bots << std::endl;
-		std::cout << update_tick << std::endl;*/
 		sprintf_s(aFilename, sizeof(aFilename), "lr%.1embs%lldppoe%lldbots%drpb%d.csv", model_manager->GetLearningRate(), model_manager->GetMiniBatchSize(), model_manager->GetCountPPOEpochs(), count_bots, update_tick);
 		logger.open("train\\" + dir_name + "\\" + aFilename);
 		logger << "Step,Average reward,TPS,Dies,Average distance,Training loss,Actor loss,Critic loss,Learning rate,Time since start,Time to decide,Time to tick,Time rest,Time pre forward,Time forward,Time normal,Time to cpu,Time process last,Average speed" << endl;
 	}
 	dbg_msg("neuralnetwork", "data.csv file created and initialized.");
-
-	//printf("data.csv file created and initialized.\n");
 
 	// Recording demo to spectate how model performs
 	string path_demo;
@@ -312,7 +216,7 @@ void CNeuralNetwork::OnInit()
 			char aFilename[IO_MAX_PATH_LENGTH];
 			str_format(aFilename, sizeof(aFilename), "%s_%d_%llu.demo", m_pServer->m_aCurrentMap, m_pServer->m_NetServer.Address().port, time_get());
 			path_demo = "train/" + dir_name + "/demos/" + aFilename;
-			int ret = m_pServer->m_aDemoRecorder[0].Start(m_pStorage, m_pConsole, path_demo.c_str(), m_pGameContext->NetVersion(), m_pServer->m_aCurrentMap, &m_pServer->m_aCurrentMapSha256[CServer::MAP_TYPE_SIX], m_pServer->m_aCurrentMapCrc[CServer::MAP_TYPE_SIX], "server", m_pServer->m_aCurrentMapSize[CServer::MAP_TYPE_SIX], m_pServer->m_apCurrentMapData[CServer::MAP_TYPE_SIX]);
+			int ret = m_pServer->m_aDemoRecorder[MAX_CLIENTS].Start(m_pStorage, m_pConsole, path_demo.c_str(), m_pGameContext->NetVersion(), m_pServer->m_aCurrentMap, &m_pServer->m_aCurrentMapSha256[CServer::MAP_TYPE_SIX], m_pServer->m_aCurrentMapCrc[CServer::MAP_TYPE_SIX], "server", m_pServer->m_aCurrentMapSize[CServer::MAP_TYPE_SIX], m_pServer->m_apCurrentMapData[CServer::MAP_TYPE_SIX]);
 		}
 	}
 
@@ -344,6 +248,10 @@ void CNeuralNetwork::PreTick()
 		start_ticks = m_pServer->Tick();
 		ticks_timer = time_get_impl();
 	}
+	if(m_pServer->Tick() > 1000)
+	{
+		m_pServer->m_aDemoRecorder[MAX_CLIENTS].Stop();
+	}
 	// Handle bots
 	if(m_pServer->Tick() % skip_tick == 0)
 	{
@@ -351,217 +259,163 @@ void CNeuralNetwork::PreTick()
 		pTiles = static_cast<CTile *>(Kernel()->RequestInterface<IMap>()->GetData(gamelayer->m_Data));
 		int map_width = gamelayer->m_Width;
 		int map_height = gamelayer->m_Height;
-		//printf("6\n");
 
 		//  apply new input
 		// decide_time = time_get_impl();
 		for(size_t i = 0; i < vBots.size(); i++)
 		{
-			//printf("HAHHA3.1\n");
 			auto bot = vBots[i];
-			//printf("HAHHA3.2\n");
-			//  Move bot wherever you want
-			// vec2 center_coords = vec2(12.f * 32.f, 12.f * 32.f);
 
 			auto bot_character = bot->GetCharacter();
 			CCharacterCore *bot_character_core;
 			// auto bot_2_character = gamecontext->GetPlayerChar(bot_2->GetCID());
-			//printf("HAHHA3.3\n");
 			if(respawn_all && model_manager->IsTraining())
 			{
-				// Add to cumulative spawn distance vector
-				// int iOldSpawnPoint = vBotsSpawnPos[i];
-				// vSpawnCumulativeDistance[iOldSpawnPoint] += bot_character_core->m_Pos.x - vSpawnPoints[iOldSpawnPoint].x;
+				vec2 spawn_pos;
 
-				// int iSpawnPoint = (int)round(random_float() * (float)vSpawnPoints.size()) % vSpawnPoints.size();
-				int iSpawnPoint;
-				/*if(!validating)
-				{
-					iSpawnPoint = spawn_probabilities_distribution(gen);
-				}
+				if(i % 3 == 2)
+					spawn_pos = ball_spawn_pos;
 				else
-				{
-					iSpawnPoint = vBotsValidateSpawnPoint[i];
-				}*/
-				iSpawnPoint = spawn_probabilities_distribution(gen);
+					spawn_pos = i % 3 == 0 ? first_bot_spawn_pos : second_bot_spawn_pos;
+				
 				bot->KillCharacter();
-				bot->TryRespawn(vSpawnPoints[iSpawnPoint]);
+				bot->TryRespawn(spawn_pos);
 
 				bot_character = bot->GetCharacter();
 				bot_character_core = bot_character->Core();
-				bot_character->SetSolo(true);
 
-				vBotsSpawnPos[i] = iSpawnPoint;
-				vSpawnLives[iSpawnPoint] += 1;
-				vBotsCumulativeRewards[i] = 0;
-				bot_character_core->m_Vel = vec2(2.f * random_float() - 1.f, 2.f * random_float() - 1.f);
-				vBotsLastCheckPoint[i] = bot_character->m_PrevPos = bot_character->m_Pos = bot_character_core->m_Pos = vSpawnPoints[iSpawnPoint];
-				auto spawn_point_pos = std::pair<int, int>((int)vSpawnPoints[iSpawnPoint].y / 32, (int)vSpawnPoints[iSpawnPoint].x / 32);
-				vBotBestDistance[i] = {astar->distanceToGoal(spawn_point_pos), m_pServer->Tick()};
-				vBotsPath[i] = astar->findPath(spawn_point_pos, 30);
-				// bot_2->KillCharacter();
-				// bot_2->TryRespawn();
-				// bot_character->Core()->m_Pos.x = 3.f * 32.f + random_float() * 4.f * 32.f;
-				// bot_2_character->Core()->m_Pos.x = 4.f * 32.f + random_float() * 12.f * 32.f;
-				// start_tick = m_CurrentGameTick;
+				vBotsCumulativeRewards[i - ((i+1)/3)] = 0;
 			}
 
-			if(!bot_character)
+			if(!bot_character || i % 3 == 2)
 			{
 				continue;
 			}
 
 			bot_character_core = bot_character->Core();
 
-			vec2 bot_pos = bot_character->Core()->m_Pos;
-			/*std::cout << bot_pos.x
-					<< " " << bot_pos.y << std::endl;*/
-			// bot_character->Core()->m_HookDir
-			// vec2 delta_coords = center_coords - bot_pos;
+			int enemy_id = i % 3 == 0 ? i + 1 : i - 1 ;
+			int ball_id = i % 3 == 0 ? i + 2 : i + 1;
 
-			/*vec2 rand_pos = {random_float() * 24.f * 32.f, random_float() * 24.f * 32.f};
-			delta_coords = center_coords - rand_pos;
+			int rotate = i % 3 == 1 ? -1 : 1;
 
-			int should_angle = coords_to_angle(delta_coords.x, delta_coords.y);
-			int actual_angle = bot_character_core->m_Angle+402;
-			prev_angle_dist = calc_angles_distance(actual_angle, should_angle);*/
+			CCharacterCore *enemy_character_core = vBots[enemy_id]->GetCharacter()->Core();
 
-			ModelInputInputs *input_inputs = &vInputInputs[i];
+			CCharacterCore *ball_character_core = vBots[ball_id]->GetCharacter()->Core();
 
-			// auto gamecontext = ((CGameContext *)GameServer());
+			vec2 bot_pos = bot_character_core->m_Pos;
 
-			// const int Index = (int)(bot_pos.y / 32 + 1) * gamelayer->m_Width + (int)(bot_pos.x / 32);
-			// const int GameIndex = pTiles[Index].m_Index;
+			vec2 enemy_pos = enemy_character_core->m_Pos;
 
-			input_inputs->bot_pos = {bot_pos.x - (int)bot_pos.x, bot_pos.y - (int)bot_pos.y};
-			input_inputs->bot_vel = bot_character_core->m_Vel / 20.f;
+			vec2 ball_pos = ball_character_core->m_Pos;
+
+			bool out_of_area = false;
+
+			ModelInputInputs *input_inputs = &vInputInputs[i - ((i + 1) / 3)];
+
+			// Local bot
+
+			input_inputs->bot_pos = 
+					{(bot_pos.x - volleyball_area_center.x) / (volleyball_area_sizes.x / 2.f),
+					(bot_pos.y - volleyball_area_center.y) / (volleyball_area_sizes.y / 2.f)};
+			input_inputs->bot_pos.x *= rotate;
+			if(input_inputs->bot_pos.x < -1.f || input_inputs->bot_pos.x > 1.f
+				|| input_inputs->bot_pos.y < -1.f || input_inputs->bot_pos.y > 1.f)
+			{
+				input_inputs->bot_pos = {0, 0};
+				input_inputs->bot_is_out_of_area = true;
+			}
+			else
+				input_inputs->bot_is_out_of_area = false;
+			input_inputs->bot_vel = bot_character_core->m_Vel / 40.f;
+			input_inputs->bot_vel.x *= rotate;
 
 			input_inputs->bot_is_hooking = bot_character_core->m_HookState == HOOK_FLYING || bot_character_core->m_HookState == HOOK_GRABBED;
 			input_inputs->bot_is_grabbed = bot_character_core->m_HookState == HOOK_GRABBED;
 			input_inputs->bot_is_retracted = bot_character_core->m_HookState == HOOK_RETRACTED || (bot_character_core->m_HookState >= HOOK_RETRACT_START && bot_character_core->m_HookState <= HOOK_RETRACT_END);
 
-			if(input_inputs->bot_is_hooking)
+			if(!input_inputs->bot_is_out_of_area && input_inputs->bot_is_hooking)
 			{
-				//printf("HJQWHEe1\n");
 				auto hook_relative = (bot_character_core->m_HookPos - bot_character_core->m_Pos) / m_pGameContext->Tuning()->m_HookLength;
-				//printf("HJQWHEe2\n");
-				input_inputs->bot_hook_pos = vec2(clamp(hook_relative.x, -1.f, 1.f), clamp(hook_relative.y, -1.f, 1.f));
+
+				input_inputs->bot_hook_pos = (bot_character_core->m_HookPos - volleyball_area_start) / volleyball_area_sizes;
+				input_inputs->bot_hook_pos.x *= rotate;
 				input_inputs->bot_hook_dir = bot_character_core->m_HookDir;
-				//printf("HJQWHEe3\n");
+				input_inputs->bot_hook_dir.x *= rotate;
+
 				auto ataned = atan2(hook_relative.y, hook_relative.x);
 				auto angle_x = cos(ataned);
 				auto angle_y = sin(ataned);
 				input_inputs->bot_hook_angle = vec2(angle_x, angle_y);
-				//printf("HJQWHEe4\n");
-				
-				//printf("HJQWHEe5\n");
-
-				//vPrevHookPos[i] = bot_character_core->m_HookPos;
-				//printf("HJQWHEe6\n");
+				input_inputs->bot_hook_angle.x *= rotate;
 			}
 			else
 			{
-				//vIsPreviouslyHooked[i] = false;
 				input_inputs->bot_hook_pos = input_inputs->bot_hook_dir = input_inputs->bot_hook_angle = vec2(0, 0);
 			}
 
-			//cout << "Starting..." << endl;
-			// decide_time = time_get_impl();
+			// Enemy
 
-			int cur_index_x = std::clamp((int)(bot_pos.x / 32), 0, map_width - 1);
-			int cur_index_y = std::clamp((int)(bot_pos.y / 32), 0, map_height - 1);
-			int prev_index_x = std::clamp((int)(vBotLastPos[i].x / 32), 0, map_width - 1);
-			int prev_index_y = std::clamp((int)(vBotLastPos[i].y / 32), 0, map_height - 1);
+			input_inputs->enemy_pos =
+				{(enemy_pos.x - volleyball_area_center.x) / (volleyball_area_sizes.x / 2.f),
+					(enemy_pos.y - volleyball_area_center.y) / (volleyball_area_sizes.y / 2.f)};
+			input_inputs->enemy_pos.x *= rotate;
+			if(input_inputs->enemy_pos.x < -1.f || input_inputs->enemy_pos.x > 1.f || input_inputs->enemy_pos.y < -1.f || input_inputs->enemy_pos.y > 1.f)
+			{
+				input_inputs->enemy_pos = {0, 0};
+				input_inputs->enemy_is_out_of_area = true;
+			}
+			else
+				input_inputs->enemy_is_out_of_area = false;
+			input_inputs->enemy_vel = enemy_character_core->m_Vel / 40.f;
+			input_inputs->enemy_vel.x *= rotate;
 
-			vBotLastPos[i] = bot_pos;
-			vBotLastVel[i] = length(bot_character_core->m_Vel);
-			//printf("2\n");
+			input_inputs->enemy_is_hooking = enemy_character_core->m_HookState == HOOK_FLYING || enemy_character_core->m_HookState == HOOK_GRABBED;
+			input_inputs->enemy_is_grabbed = enemy_character_core->m_HookState == HOOK_GRABBED;
+			input_inputs->enemy_is_retracted = enemy_character_core->m_HookState == HOOK_RETRACTED || (enemy_character_core->m_HookState >= HOOK_RETRACT_START && enemy_character_core->m_HookState <= HOOK_RETRACT_END);
 
-			//for(size_t y = 0; y < height; y++)
-			//{
-			//	for(size_t x = 0; x < width; x++)
-			//	{
-			//		int index_x = std::clamp((int)(bot_pos.x / 32 - width / 2 + x), 0, map_width - 1);
-			//		int index_y = std::clamp((int)(bot_pos.y / 32 - height / 2 + y), 0, map_height - 1);
-			//		int Index = index_y * map_width + index_x;
+			if(!input_inputs->enemy_is_out_of_area && input_inputs->enemy_is_hooking)
+			{
+				auto hook_relative = (enemy_character_core->m_HookPos - enemy_character_core->m_Pos) / m_pGameContext->Tuning()->m_HookLength;
 
-			//		/*if(y == height / 2 && width / 2 == x)
-			//		{
-			//			continue;
-			//		}*/
-			//		// input_blocks->blocks[block_count] = pTiles[Index].m_Index;
-			//		//printf("2.1\n");
+				input_inputs->enemy_hook_pos = (enemy_character_core->m_HookPos - volleyball_area_start) / volleyball_area_sizes;
+				input_inputs->enemy_hook_pos.x *= rotate;
+				input_inputs->enemy_hook_dir = enemy_character_core->m_HookDir;
+				input_inputs->enemy_hook_dir.x *= rotate;
 
-			//		switch(pTiles[Index].m_Index)
-			//		{
-			//		case 1:
-			//			input_blocks->blocks[block_count] = pTiles[Index].m_Index;
-			//			break;
-			//		case 9:
-			//			input_blocks->blocks[block_count] = 2;
-			//			break;
-			//		default:
-			//			input_blocks->blocks[block_count] = 0;
-			//			break;
-			//		}
-			//		//printf("2.2\n");
+				auto ataned = atan2(hook_relative.y, hook_relative.x);
+				auto angle_x = cos(ataned);
+				auto angle_y = sin(ataned);
+				input_inputs->enemy_hook_angle = vec2(angle_x, angle_y);
+				input_inputs->enemy_hook_angle.x *= rotate;
+			}
+			else
+			{
+				input_inputs->enemy_hook_pos = input_inputs->enemy_hook_dir = input_inputs->enemy_hook_angle = vec2(0, 0);
+			}
 
-			//		/*switch(pTiles[Index].m_Index)
-			//		{
-			//		case 1:
-			//			cout << "H";
-			//			break;
-			//		case 2:
-			//			cout << "D";
-			//			break;
-			//		case 3:
-			//			cout << "U";
-			//			break;
-			//		default:
-			//			cout << " ";
-			//			break;
-			//		}*/
+			//
+			// Ball
+			//
+			//std::cout << ball_pos.x << std::endl;
+			input_inputs->ball_pos =
+				{(ball_pos.x - volleyball_area_center.x) / (volleyball_area_sizes.x / 2.f),
+					(ball_pos.y - volleyball_area_center.y) / (volleyball_area_sizes.y / 2.f)};
+			
+			input_inputs->ball_pos.x *= rotate;
+			
+			if(input_inputs->ball_pos.x < -1.f || input_inputs->ball_pos.x > 1.f || input_inputs->ball_pos.y < -1.f || input_inputs->ball_pos.y > 1.f)
+			{
+				input_inputs->ball_pos = {0, 0};
+				input_inputs->ball_is_out_of_area = true;
+			}
+			else
+				input_inputs->ball_is_out_of_area = false;
 
-			//		block_count += 1;
-			//	}
-			//	// cout << endl;
-			//}
-			// summerr += time_get_impl() - decide_time;
-
-			//printf("HAHHA3.4\n");
-			// vInputs[i] = input;
-			//printf("HAHHA3.4.1\n");
-			//printf("HAHHA3.5\n");
-			//  int64_t decide_time = time_get_impl();
-			// ModelOutput returned_model = model_manager.Decide(input); // {0.0f}; //
-			//// cout << "Time to decide: " << (float)(time_get_impl() - decide_time) / (float)time_freq() << endl;
-			// model_angle = returned_model.angle * 1608;
-			// model_direction = returned_model.direction;
-			// model_hook = returned_model.hook;
-			// started = true;
-			//  prev_angle_dist = calc_angles_distance((int)model_angle, should_angle);
-
-			// int should_angle = coords_to_angle(delta_coords.x, delta_coords.y);
-			/*actual_angle = bot_character_core->m_Angle + 402;
-			int now_dist = calc_angles_distance(model_angle, should_angle);
-
-			float reward = -(((float)now_dist / 402.f) - 1.f);
-			model_manager.Reward(reward, (m_CurrentGameTick - start_tick >= 1000) ? 1 : 0);
-			rewards.push_back(-calc_angles_distance(model_angle, should_angle));*/
-
-			// model_direction = returned_model.direction;
-			// int reward = -calc_angles_distance(model_angle, should_angle);
-
-			/*model_manager.Reward(reward, (m_CurrentGameTick - start_tick >= 1000) ? 1 : 0);
-			rewards.push_back(reward);*/
-
-			// std::cout << actual_angle << " " << reward << std::endl;
-
-			/*std::cout << delta_coords.x
-					<< " " << delta_coords.y
-					<< " Model: " << model_angle
-					<< " Should be: " << should_angle
-					<< " Reward: " << reward << std::endl;*/
+			input_inputs->ball_vel = ball_character_core->m_Vel / 40.f;
+			input_inputs->ball_vel.x *= rotate;
+			vBotLastPos[i - ((i + 1) / 3)] = bot_pos;
+			vBotLastVel[i - ((i + 1) / 3)] = length(bot_character_core->m_Vel);
 		}
 		if(respawn_all)
 		{
@@ -569,33 +423,6 @@ void CNeuralNetwork::PreTick()
 		}
 		// cout << "Time calcs: " << (float)summerr / (float)time_freq() << endl;
 
-		// auto player_char = gamecontext->GetPlayerChar(c);
-
-		// if(player_char != nullptr)
-		//{
-		//	auto vel = player_char->Core()->m_Vel;
-		//	auto x_pos = player_char->m_Pos.x / 32.0f;
-		//	auto y_pos = player_char->m_Pos.y / 32.0f;
-
-		//	for(auto &Input : m_aClients[c].m_aInputs)
-		//	{
-		//		if(Input.m_GameTick == Tick() + 1)
-		//		{
-		//			CNetObj_PlayerInput *pApplyInput = (CNetObj_PlayerInput *)Input.m_aData;
-		//			auto is_hooking = pApplyInput->m_Hook;
-		//			auto direction_moving = pApplyInput->m_Direction;
-
-		//			break;
-		//		}
-		//	}
-
-		//	const int Index = (int)(y_pos + 1) * gamelayer->m_Width + (int)(x_pos);
-		//	const int GameIndex = pTiles[Index].m_Index;
-		//	//std::cout << m_aClients[c].m_aName << " " << m_aClients[c].m_Addr.ip[0] << " " << vel.x << std::endl;
-		//	//sprintf(buf, "x:%f y:%f %i\n", player_char->m_Pos.x, player_char->m_Pos.y, GameIndex);
-		//	//printf(buf);
-		//}
-		//printf("HAHHA4\n");
 		auto now = std::chrono::high_resolution_clock::now();
 		cumulative_time_rest += std::chrono::duration_cast<std::chrono::duration<float>>(now - decide_time).count() * 1000.f;
 		// cout << "Time rest: " << std::chrono::duration_cast<std::chrono::duration<float>>(now - decide_time).count() << endl;
@@ -605,10 +432,8 @@ void CNeuralNetwork::PreTick()
 		double time_to_cpu = 0;
 		double time_process_last = 0;
 		decide_time = std::chrono::high_resolution_clock::now();
-		//printf("1.1\n");
 
 		vOutputs = model_manager->Decide(vInputInputs, time_pre_forward, time_forward, time_normal, time_to_cpu, time_process_last);
-		//printf("1.2\n");
 
 		now = std::chrono::high_resolution_clock::now();
 		cumulative_time_to_decide += std::chrono::duration_cast<std::chrono::duration<float>>(now - decide_time).count() * 1000.f;
@@ -627,11 +452,16 @@ void CNeuralNetwork::PreOnClientPredictedInput()
 {
 	for(size_t i = 0; i < vBots.size(); i++)
 	{
-		//printf("HAHHA1111\n");
 		auto bot = vBots[i];
-		//printf("HAHHA2222\n");
-		//  Move bot wherever you want
 
+		bot->UpdatePlaytime();
+
+		if(i%3 == 2)
+		{
+			continue;
+		}
+
+		//  Move bot wherever you want
 		// m_Direction:
 		// 1 - Right
 		// 0 - Stay
@@ -639,149 +469,29 @@ void CNeuralNetwork::PreOnClientPredictedInput()
 
 		int angle = 0;
 
-		//auto coords = angle_to_coords(angle);
-
-		// angle += 1;
-		// angle %= 1608;
-
-		vec2 center_coords = vec2(24.5f * 32.0f, 20.5f * 32.0f);
-
 		auto bot_character = bot->GetCharacter();
 		int model_jump = 0;
-		//printf("HAHHA2222\n");
 		vec2 model_angle;
 		int model_direction = 0;
 		int model_hook = 0;
 
 		if(bot_character != nullptr)
 		{
-			// vec2 bot_pos = bot_character->m_Pos;
-			/*std::cout << bot_pos.x
-				    << " " << bot_pos.y << std::endl;*/
-
-			// vec2 delta_coords = center_coords - bot_pos;
-
-			/*if(bot_character->IsGrounded())
-			{
-				jump = 1;
-			}*/
-			ModelOutput returned_model = vOutputs[i]; // {0.0f}; //
-			//printf("HAHHA33.2\n");
-			//  cout << "Time to decide: " << (float)(time_get_impl() - decide_time) / (float)time_freq() << endl;
+			ModelOutput returned_model = vOutputs[i - ((i+1)/3)]; // {0.0f}; //
 			model_angle = returned_model.angle * 299.f;
 			model_direction = returned_model.direction;
 			model_hook = returned_model.hook;
-
-			if(m_pServer->Tick() % skip_tick != 1)
-			{
-				model_jump = 0;
-			}
-			else
-			{
-				model_jump = returned_model.jump;
-			}
-			//printf("HAHHA33.3\n");
-			//printf("HAHHA34\n");
-			//  static ModelManager model_manager;
-			//  static std::vector<int> rewards;
-			//  static int best_average = -999999;
-
-			// if(m_CurrentGameTick - start_tick >= 1000)
-			//{
-			//	int average = std::accumulate(rewards.begin(), rewards.end(), 0) / (int)rewards.size();
-			//	cout << "Average: " << average << endl;
-			//	rewards.clear();
-
-			//	//if(m_aDemoRecorder[c].IsRecording())
-			//		//m_aDemoRecorder[c].Stop();
-
-			//	if(average > best_average)
-			//	{
-			//		best_average = average;
-			//		model_manager.Save("best_model_" + to_string(average) + ".pt");
-
-			//		char aNewFilename[IO_MAX_PATH_LENGTH];
-			//		str_format(aNewFilename, sizeof(aNewFilename), "demos/average_%d_%s_%s_%llu.demo", average, m_aCurrentMap, m_aClients[c].m_aName, time_get());
-			//		//Storage()->RenameFile(m_aDemoRecorder[c].GetCurrentFilename(), aNewFilename, IStorage::TYPE_SAVE);
-			//	}
-			//	else
-			//	{
-			//		//char aFilename[IO_MAX_PATH_LENGTH];
-			//		//str_format(aFilename, sizeof(aFilename), "demos/%s_%d_%d_tmp.demo", m_aCurrentMap, m_NetServer.Address().port, c);
-			//		//Storage()->RemoveFile(m_aDemoRecorder[c].GetCurrentFilename(), IStorage::TYPE_SAVE);
-			//	}
-
-			//	//char aFilename[IO_MAX_PATH_LENGTH];
-			//	//str_format(aFilename, sizeof(aFilename), "demos/%s_%d_%d_%llu.demo", m_aCurrentMap, m_NetServer.Address().port, c, time_get());
-			//	//int ret = m_aDemoRecorder[bot->GetCID()].Start(Storage(), Console(), aFilename, GameServer()->NetVersion(), m_aCurrentMap, &m_aCurrentMapSha256[MAP_TYPE_SIX], m_aCurrentMapCrc[MAP_TYPE_SIX], "server", m_aCurrentMapSize[MAP_TYPE_SIX], m_apCurrentMapData[MAP_TYPE_SIX]);
-			//	//printf("ret: %i\n", m_aDemoRecorder[c].IsRecording());
-
-			//	model_manager.Update();
-			//}
-
-			// int should_angle = coords_to_angle(delta_coords.x, delta_coords.y);
-
-			// ModelOutput returned_model = model_manager.Decide({bot_pos}); // {0.0f}; //
-			// int model_angle = returned_model.angle * 1608;
-
-			// int reward = -calc_angles_distance(model_angle, should_angle);
-
-			// model_manager.Reward(reward, (m_CurrentGameTick - start_tick >= 1000) ? 1 : 0);
-			// rewards.push_back(reward);
-
-			// coords = angle_to_coords(model_angle);
-
-			/*std::cout << delta_coords.x
-					<< " " << delta_coords.y
-				<< " Actual: " << angle
-					    << " Should be: " << should_angle
-					<< " Reward: " << reward << std::endl;*/
 		}
-
-		bot->UpdatePlaytime();
 
 		CNetObj_PlayerInput pApplyInput;
 		mem_zero(&pApplyInput, sizeof(pApplyInput));
 		pApplyInput.m_TargetX = (int)round(model_angle.x);
 		pApplyInput.m_TargetY = (int)round(model_angle.y);
-		pApplyInput.m_Jump = model_jump;
+		//pApplyInput.m_Jump = model_jump;
 		pApplyInput.m_Direction = model_direction;
 		pApplyInput.m_Hook = model_hook;
 
-		// auto gamecontext = ((CGameContext *)GameServer());
-
-		// gamecontext->m_apPlayers[0]->m_Score;
-		//printf("17\n");
 		m_pGameContext->OnClientPredictedInput(bot->GetCID(), &pApplyInput);
-		//printf("18\n");
-		//  #include <>
-		//  if(strcmp(m_aClients[0].m_aName, "heartless tee") == 0)
-		//{
-		//	for(auto &Input : m_aClients[0].m_aInputs)
-		//	{
-		//		if(Input.m_GameTick == Tick())
-		//		{
-		//			CNetObj_PlayerInput pApplyInput;
-		//			mem_zero(&pApplyInput, sizeof(pApplyInput));
-		//			memcpy(&pApplyInput, Input.m_aData, sizeof(pApplyInput));
-		//			GameServer()->OnClientPredictedInput(c, &pApplyInput);
-		//			break;
-		//		}
-		//	}
-		//  }
-		//  else
-		//{
-		//	CNetObj_PlayerInput pApplyInput;
-		//	mem_zero(&pApplyInput, sizeof(pApplyInput));
-		//	pApplyInput.m_TargetX = coords.x;
-		//	pApplyInput.m_TargetY = coords.y;
-
-		//	//auto gamecontext = ((CGameContext *)GameServer());
-
-		//	// gamecontext->m_apPlayers[0]->m_Score;
-
-		//	GameServer()->OnClientPredictedInput(c, &pApplyInput);
-		//}
 	}
 }
 
@@ -798,13 +508,10 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 	static int count_updated = 0;
 
 	// Rewards
-	static float checkpoint_reward = 100.f / 32.f;
-	static float die_reward = -10.f; // -500.f / 32.f
-	static float finish_reward = 10.f;
-	static float speed_reward_coefficient = 0.2f;
-	static float speed_accelerate_reward_coefficient = 0.5f; 
+	static float goal_reward = 5.f;
+	static float ball_on_side_reward = 0.1f;
 	static float step_reward = -0.01f;
-	static float divide_reward_by = 10.f;
+	static float divide_reward_by = 5.f;
 
 	static int long_no_improvements_ticks = 200;
 
@@ -815,255 +522,103 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 	auto now = std::chrono::high_resolution_clock::now();
 	cumulative_time_to_tick += time_to_tick * 1000.f;
 
-	//printf("HAHHA1\n");
 	// size_t summerr = 0;
 	// decide_time = time_get_impl();
 	if(m_pServer->Tick() % skip_tick == 0)
 	{
-		std::vector<int> vBotsIdsToEraseReplays;
-		for(size_t i = 0; i < vBots.size(); i++)
+		for(size_t team_id = 0; team_id < count_teams; team_id++)
 		{
-			auto bot = vBots[i];
-			// Move bot wherever you want
-			// vec2 center_coords = vec2(12.f * 32.f, 12.f * 32.f);
-			//printf("8\n");
-			auto bot_character = bot->GetCharacter();
-			//printf("9\n");
-			//  auto bot_2_character = gamecontext->GetPlayerChar(bot_2->GetCID());
-			bool died = false;
-			bool finished = false;
-			bool freezed = false;
-			bool long_no_improvement = false;
+			bool match_is_done = false;
 
-			if(bot_character != nullptr)
+			int first_bot_id = team_id * 3;
+			int second_bot_id = team_id * 3 + 1;
+			int ball_id = team_id * 3 + 2;
+
+			int teleport_num = 0;
+
+			auto first_bot_character = vBots[first_bot_id]->GetCharacter();
+			auto second_bot_character = vBots[second_bot_id]->GetCharacter();
+			auto ball_character = vBots[ball_id]->GetCharacter();
+
+			teleport_num = ball_character->teleport_num;
+			ball_character->teleport_num = 0;
+
+			auto first_bot_pos = first_bot_character->m_Pos;
+			auto second_bot_pos = second_bot_character->m_Pos;
+			auto ball_pos = ball_character->m_Pos;
+
+			float reward = 0;
+
+			if(teleport_num > 0)
 			{
-				vec2 bot_pos = bot_character->Core()->m_Pos;
-
-				int bot_block_pos_x = (int)(bot_pos.x / 32);
-				int bot_block_pos_y = (int)(bot_pos.y / 32);
-				int bot_block_index = bot_block_pos_y * gamelayer->m_Width + bot_block_pos_x;
-
-				if(pTiles[bot_block_index].m_Index == 34)
-				{
-					finished = true;
-				}
-
-				if(bot_character->m_FreezeTime || bot_character->Core()->m_IsInFreeze || pTiles[bot_block_index].m_Index == 9 /*|| m_pServer->Tick() - vBotBestDistance[i].second >= long_no_improvements_ticks*/)
-				{
-					freezed = true;
-				}
-
-				if(m_pServer->Tick() - vBotBestDistance[i].second >= long_no_improvements_ticks && !freezed && !finished)
-				{
-					long_no_improvement = true;
-					//vBotsIdsToEraseReplays.push_back(i);
-				}
+				std::cout << "Teleport num: " << teleport_num << std::endl;
+				reward += teleport_num == 1 ? -goal_reward : goal_reward;
 			}
 
-			if((bot_character == nullptr) || freezed || finished || long_no_improvement)
+			if(first_bot_pos.x < volleyball_final_area_right_top_corner.x && first_bot_pos.y > volleyball_final_area_right_top_corner.y \
+				|| second_bot_pos.x < volleyball_final_area_right_top_corner.x && second_bot_pos.y > volleyball_final_area_right_top_corner.y)
 			{
-				if(bot_character == nullptr || freezed || long_no_improvement)
+				match_is_done = true;
+
+				// Respawn everyone in team
+				for(size_t i = 0; i < 3; i++)
 				{
-					died = true;
-					dies += 1;
-					if(bot_character)
-					{
-						bot->KillCharacter();
-					}
-					//printf("1\n");
-					if(!model_manager->IsTraining())
-					{
-						m_pServer->m_aDemoRecorder[bot->GetCID()].Stop();
-
-						m_pStorage->RemoveFile(m_pServer->m_aDemoRecorder[bot->GetCID()].GetCurrentFilename(), IStorage::TYPE_ABSOLUTE);
-
-						char aweweFilename[IO_MAX_PATH_LENGTH];
-						str_format(aweweFilename, sizeof(aweweFilename), "%llu_%s_%d_%llu.demo", i, m_pServer->m_aCurrentMap, m_pServer->m_NetServer.Address().port, time_get_impl());
-						string path_demo = "train/" + dir_name + "/demos/" + aweweFilename;
-						int ret = m_pServer->m_aDemoRecorder[bot->GetCID()].Start(m_pStorage, m_pConsole, path_demo.c_str(), m_pGameContext->NetVersion(), m_pServer->m_aCurrentMap, &m_pServer->m_aCurrentMapSha256[CServer::MAP_TYPE_SIX], m_pServer->m_aCurrentMapCrc[CServer::MAP_TYPE_SIX], "server", m_pServer->m_aCurrentMapSize[CServer::MAP_TYPE_SIX], m_pServer->m_apCurrentMapData[CServer::MAP_TYPE_SIX]);
-					}
-				}
-				else if(finished)
-				{
-					//printf("2\n");
-
-					if(!model_manager->IsTraining())
-					{
-						m_pServer->m_aDemoRecorder[bot->GetCID()].Stop();
-
-						char aNewFilename[IO_MAX_PATH_LENGTH];
-						str_format(aNewFilename, sizeof(aNewFilename), "time_%.2f_%llu.demo", (float)(m_pServer->Tick() - bot->GetCharacter()->m_StartTime) / 50.f, time_get_impl());
-						string path_demo = "train/" + dir_name + "/demos/" + aNewFilename;
-						m_pStorage->RenameFile(m_pServer->m_aDemoRecorder[bot->GetCID()].GetCurrentFilename(), path_demo.c_str(), IStorage::TYPE_ABSOLUTE);
-					}
-					//printf("3\n");
+					int bot_id = team_id * 3 + i;
+					auto bot = vBots[bot_id];
 
 					bot->KillCharacter();
 
-					if(!model_manager->IsTraining())
+					vec2 spawn_pos;
+
+					if(i % 3 == 2)
 					{
-						char aFilename[IO_MAX_PATH_LENGTH];
-						str_format(aFilename, sizeof(aFilename), "%llu_%s_%d_%llu.demo", i, m_pServer->m_aCurrentMap, m_pServer->m_NetServer.Address().port, time_get_impl());
-						string path_demo = "train/" + dir_name + "/demos/" + aFilename;
-						int ret = m_pServer->m_aDemoRecorder[bot->GetCID()].Start(m_pStorage, m_pConsole, path_demo.c_str(), m_pGameContext->NetVersion(), m_pServer->m_aCurrentMap, &m_pServer->m_aCurrentMapSha256[CServer::MAP_TYPE_SIX], m_pServer->m_aCurrentMapCrc[CServer::MAP_TYPE_SIX], "server", m_pServer->m_aCurrentMapSize[CServer::MAP_TYPE_SIX], m_pServer->m_apCurrentMapData[CServer::MAP_TYPE_SIX]);
+						spawn_pos = ball_spawn_pos;
 					}
-					//printf("4\n");
+					else
+					{
+						spawn_pos = i % 3 == 0 ? first_bot_spawn_pos : second_bot_spawn_pos;
+					}
+					bot->TryRespawn(spawn_pos);
 
-					/*char aFilename[IO_MAX_PATH_LENGTH];
-					str_format(aFilename, sizeof(aFilename), "%s_%s_%d_%llu.demo", m_aCurrentMap, name.c_str(), m_NetServer.Address().port, time_get());
-					string path_demo = "train/" + dir_name + "/demos/" + aFilename;
-					int ret = m_aDemoRecorder[i].Start(Storage(), m_pConsole, path_demo.c_str(), GameServer()->NetVersion(), m_aCurrentMap, &m_aCurrentMapSha256[MAP_TYPE_SIX], m_aCurrentMapCrc[MAP_TYPE_SIX], "server", m_aCurrentMapSize[MAP_TYPE_SIX], m_apCurrentMapData[MAP_TYPE_SIX]);*/
+					vBotsCumulativeRewards[bot_id - ((bot_id + 1) / 3)] = 0;
 				}
-
-				// decide_time = time_get_impl();
-				// bot_character->Core()->m_IsInFreeze
-				// int iSpawnPoint = (int)round(random_float() * (float)vSpawnPoints.size()) % vSpawnPoints.size();
-				int iSpawnPoint = spawn_probabilities_distribution(gen);
-				bot->TryRespawn(vSpawnPoints[iSpawnPoint]);
-				// summerr += time_get_impl() - decide_time;
-				bot_character = bot->GetCharacter();
-				bot_character->SetSolo(true);
-				if(bot_character == nullptr)
-				{
-					dbg_msg("neuralnetwork", "FFFFUUUUUCCCCKKK");
-					//cout << "FFFFUUUUUCCCCKKK" << endl;
-					exit(1);
-				}
-
-				vBotsSpawnPos[i] = iSpawnPoint;
-				vSpawnLives[iSpawnPoint] += 1;
-				vBotsLastCheckPoint[i] = bot_character->m_PrevPos = bot_character->m_Pos = bot_character->Core()->m_Pos = vSpawnPoints[iSpawnPoint];
-				bot_character->Core()->m_Vel = vec2(2.f * random_float() - 1.f, 2.f * random_float() - 1.f);
-				vBotsCumulativeRewards[i] = 0;
-				auto spawn_point_pos = std::pair<int, int>((int)vSpawnPoints[iSpawnPoint].y / 32, (int)vSpawnPoints[iSpawnPoint].x / 32);
-				vBotsPath[i] = astar->findPath(spawn_point_pos, 30);
-				vBotBestDistance[i] = {astar->distanceToGoal(spawn_point_pos), m_pServer->Tick()};
-				//printf("respawn: %d %d %d\n", spawn_point_pos.first, spawn_point_pos.second, vBotBestDistance[i].first);
-
-				// bot_character->Core()->m_Pos.x = 3.f * 32.f + random_float() * 4.f * 32.f;
 			}
-
-			if(bot_character)
+			else
 			{
-				float reward = 0.f;
-
-				vec2 bot_pos = bot_character->Core()->m_Pos;
-
-				int bot_block_pos_x = (int)(bot_pos.x / 32);
-				int bot_block_pos_y = (int)(bot_pos.y / 32);
-				int bot_block_index = bot_block_pos_y * gamelayer->m_Width + bot_block_pos_x;
-
-				if(died)
+				if(ball_pos.x > volleyball_area_start.x && ball_pos.y > volleyball_area_start.y && ball_pos.x < volleyball_area_end.x && ball_pos.y < volleyball_area_end.y)
 				{
-					reward += die_reward; // 1000 500 348 * 32;
-				}
-				else if(finished)
-				{
-					reward += finish_reward; // 348 * 32;
-				}
-				else
-				{
-					// If touched the checkpoint reward
-					if(pTiles[bot_block_index].m_Index == 35 && vBotsLastCheckPoint[i].x < bot_block_pos_x * 32.f)
+					if(ball_pos.x < volleyball_area_center.x)
 					{
-						reward += checkpoint_reward; // 20 50 96 * 32;
-						vBotsLastCheckPoint[i] = vec2(bot_block_pos_x * 32.f, bot_block_pos_y * 32.f);
+						reward -= ball_on_side_reward;
 					}
-					// reward += bot_character->m_Pos.x - bot_character->m_PrevPos.x;
-					int bot_last_block_pos_x = vBotLastPos[i].x / 32;
-					int bot_last_block_pos_y = vBotLastPos[i].y / 32;
-					if(bot_last_block_pos_x != bot_block_pos_x || bot_last_block_pos_y != bot_block_pos_y)
+					else if (ball_pos.x > volleyball_area_center.x)
 					{
-						int prev_dist = astar->distanceToGoal(bot_last_block_pos_y, bot_last_block_pos_x);
-						vBotsPath[i] = astar->findPath(std::pair<int, int>(bot_block_pos_y, bot_block_pos_x), 30);
-						int current_dist = astar->distanceToGoal(bot_block_pos_y, bot_block_pos_x);
-						int path_dist_diff = prev_dist - current_dist;
-						reward += path_dist_diff;
-						moved_distance += path_dist_diff;
-
-						//printf("%d  %d\n", current_dist, vBotBestDistance[i].first);
-						if(current_dist < vBotBestDistance[i].first)
-						{
-							vBotBestDistance[i] = {current_dist, m_pServer->Tick()};
-						}
+						reward += ball_on_side_reward;
 					}
-					//if(i == 0)
-						//std::cout << "Speed[0]: " << bot_character->Core()->m_Vel.x << std ::endl;
-					// Reward for maintaining speed
-					float speed_reward = length(bot_character->Core()->m_Vel) / 20.f * speed_reward_coefficient;
-					reward += speed_reward;
-
-					float accelerate_reward = (length(bot_character->Core()->m_Vel) - vBotLastVel[i]) / 20.f * speed_accelerate_reward_coefficient;
-					reward += accelerate_reward;
-
-					/*auto tick_diff = m_pServer->Tick() - vBotBestDistance[i].second;
-					auto long_stay_penalty = -0.0003f * tick_diff;*/
-
-					// Encourage to run faster
-					reward += step_reward; // step_reward
-
-					/*if(bot_character->m_Pos.x < 10.f * 32.f && reward <= 0)
-					{
-						reward = -32 * 32;
-					}*/
 				}
-
-				// Add to cumulative spawn distance vector
-				int iOldSpawnPoint = vBotsSpawnPos[i];
-				vSpawnCumulativeReward[iOldSpawnPoint] += reward;
-				cumulative_reward += reward;
-
-				// int prev_dist = (int)abs(bot_character->m_PrevPos.x - bot_2_character->m_PrevPos.x);
-				// int now_dist = (int)abs(bot_character->m_Pos.x - bot_2_character->m_Pos.x);
-				// reward += prev_dist - now_dist;
-				// model_manager.Reward(reward, (m_CurrentGameTick - start_tick >= 1000) ? 1 : 0);
-				// rewards.push_back(-(int)abs(bot_character->m_Pos.x - bot_2_character->m_Pos.x));
-
-				/*vec2 delta_coords = center_coords - bot_character->m_Pos;
-				int should_angle = coords_to_angle(delta_coords.x, delta_coords.y);
-				int actual_angle = bot_character->Core()->m_Angle + 402;
-				int now_dist = calc_angles_distance(actual_angle, should_angle);
-
-				reward += prev_angle_dist - now_dist;
-				model_manager.Reward(reward, (m_CurrentGameTick - start_tick >= 1000) ? 1 : 0);
-				rewards.push_back(-calc_angles_distance(actual_angle, should_angle));*/
-
-				bool is_done = died || finished || long_no_improvement /*|| (m_CurrentGameTick % update_tick == 0) ? 1 : 0*/;
-				model_manager->Reward(reward / divide_reward_by, is_done);
-				if(!died && !finished)
-				{
-					vBotsCumulativeRewards[i] += reward;
-				}
-				char reward_name[16];
-				sprintf_s(reward_name, "%.1f %d", vBotsCumulativeRewards[i], vBotBestDistance[i].first);
-				memcpy(m_pServer->m_aClients[bot->GetCID()].m_aName, reward_name, strlen(reward_name) + 1);
-				// std::cout << reward << std::endl;
-				//rewards.push_back(reward);
 			}
+
+			float first_bot_reward = reward - step_reward;
+			float second_bot_reward = reward - step_reward;
+
+			model_manager->Reward(first_bot_reward / divide_reward_by, match_is_done);
+			model_manager->Reward(second_bot_reward / divide_reward_by, match_is_done);
 		}
 		bool is_full = false;
 		// cout << "Time rewards: " << (float)(time_get_impl() - decide_time) / (float)time_freq() << endl;
 		//printf("4444\n");
 
 		model_manager->SaveReplays(is_full);
-		/*for(auto id : vBotsIdsToEraseReplays)
-		{
-			model_manager->ErasePlayerReplays(id);
-		}
-		vBotsIdsToEraseReplays.clear();*/
-		// cout << m_CurrentGameTick << endl;
+
 		ticks_collected += 1;
-		//printf("333\n");
 
 		if(is_full)
 		{
 			// decide_time = time_get_impl();
-			//printf("UPDATING\n");
-			//printf("Updating.\n");
 
-			float avg_reward = cumulative_reward / (float)(dies + count_bots);
+			float avg_reward = cumulative_reward / (float)(dies + count_player_bots);
 			float avg_dist = ((float)moved_distance / (float)(dies));
-			float avg_speed = ((float)moved_distance / (float)((m_pServer->Tick() - last_update_tick) * count_bots) * (float)SERVER_TICK_SPEED);
+			float avg_speed = ((float)moved_distance / (float)((m_pServer->Tick() - last_update_tick) * count_player_bots) * (float)SERVER_TICK_SPEED);
 			//float avg_valid_dist = (float)validating_moved_distance / (float)count_bots;
 			//rewards.clear();
 
@@ -1113,7 +668,7 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 			size_t count_episodes = model_manager->GetCountEpisodes();
 			static size_t count_episodes_processed = 0;
 			static size_t count_every_update = 0;
-			model_manager->Update(avg_dist, dies, spawn_probabilities_updated, updated, avg_training_loss, avg_actor_loss, avg_critic_loss);
+			model_manager->Update(avg_dist, dies, updated, avg_training_loss, avg_actor_loss, avg_critic_loss);
 			count_episodes_processed += count_episodes;
 			count_every_update += 1;
 			last_update_tick = m_pServer->Tick();
@@ -1147,16 +702,6 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 					{
 						dbg_msg("neuralnetwork", "Failed to copy best optimizer");
 					}
-
-					//model_manager->Save("train\\" + dir_name + "\\models\\best"); // best" + to_string(average)
-
-					/*if(was_recording)
-					{
-						char aNewFilename[IO_MAX_PATH_LENGTH];
-						str_format(aNewFilename, sizeof(aNewFilename), "average_%f_%s_%llu.demo", average, m_aCurrentMap, time_get());
-						path_demo = "train/" + dir_name + "/demos/" + aNewFilename;
-						Storage()->RenameFile(demo_recorder->GetCurrentFilename(), path_demo.c_str(), IStorage::TYPE_ABSOLUTE);
-					}*/
 				}
 				else
 				{
@@ -1168,80 +713,6 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 
 				model_manager->Save("train\\" + dir_name + "\\models\\last");
 
-				if(count_updated % 20 == 0 && model_manager->IsTraining())
-				{
-					dbg_msg("neuralnetwork", "UPDATING");
-					std::vector<float> vAverageRewardPerSpawn(vSpawnCumulativeReward.size());
-					int count_counted = 0;
-					float cumulative_reward = 0;
-					float max_reward = 0, min_reward = 0;
-					//printf("1\n");
-					for(size_t i = 0; i < vSpawnCumulativeReward.size(); i++)
-					{
-						if(vSpawnLives[i] && vSpawnCumulativeReward[i] != 0.f)
-						{
-							float avg_reward = vSpawnCumulativeReward[i] / (float)vSpawnLives[i];
-
-							if(min_reward == 0 && max_reward == 0)
-								min_reward = max_reward = avg_reward;
-							else if (avg_reward > max_reward)
-								max_reward = avg_reward;
-							else if (avg_reward < min_reward)
-								min_reward = avg_reward;
-
-							cumulative_reward += avg_reward;
-							vAverageRewardPerSpawn[i] = avg_reward;
-							count_counted += 1;
-						}
-					}
-					//printf("1.9\n");
-					float average_reward = 0;
-					if(cumulative_reward != 0.f && count_counted)
-					{
-						average_reward = cumulative_reward / (float)count_counted;
-					}
-					dbg_msg("neuralnetwork", "Average reward: %f", average_reward);
-					//cout << "Average reward: " << average_reward << endl;
-					//printf("1.99\n");
-					/*float max_reward = *max_element(vAverageRewardPerSpawn.begin(), vAverageRewardPerSpawn.end());
-					float min_reward = *min_element(vAverageRewardPerSpawn.begin(), vAverageRewardPerSpawn.end());*/
-					dbg_msg("neuralnetwork", "Max reward: %f", max_reward);
-					dbg_msg("neuralnetwork", "Min reward: %f", min_reward);
-					float reward_delta = abs(max_reward - min_reward);
-					dbg_msg("neuralnetwork", "Reward delta: %f", reward_delta);
-					
-					float distance_to_zero = abs(min_reward) < abs(max_reward) ? abs(min_reward) : abs(max_reward);
-
-					float new_min_reward = distance_to_zero;
-					float new_max_reward = distance_to_zero + reward_delta;
-					
-					for(size_t i = 0; i < vSpawnCumulativeReward.size(); i++)
-					{
-						//printf("2.1\n");
-						if(!vSpawnLives[i] || !vSpawnCumulativeReward[i])
-						{
-							//printf("2.1.1\n");
-							vAverageRewardPerSpawn[i] = average_reward;
-						}
-						//printf("2.2\n");
-						float distance_to_lowest_reward = abs(vAverageRewardPerSpawn[i] - min_reward);
-						float reward = distance_to_zero + distance_to_lowest_reward;
-
-						vSpawnProbabilities[i] = new_max_reward - (reward - new_min_reward);
-						//printf("2.3\n");
-						vSpawnLives[i] = 0;
-						//printf("2.4\n");
-						vSpawnCumulativeReward[i] = 0;
-					}
-					//printf("2.9\n");
-					spawn_probabilities_distribution = std::discrete_distribution<>(vSpawnProbabilities.begin(), vSpawnProbabilities.end());
-					//printf("2.10\n");
-					/*for(size_t i = 0; i < vSpawnProbabilities.size(); i++)
-					{
-						cout << vSpawnProbabilities[i] << endl;
-					}*/
-					spawn_probabilities_updated = true;
-				}
 				logger << ticks_collected / count_ticks
 					    << "," << avg_reward
 					    << "," << ticks_per_second

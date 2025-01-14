@@ -163,6 +163,12 @@ private:
 	bool m_SetSavePos;
 	CSaveTee m_RescueTee;
 
+	// Neural Network
+
+	void NeuralNetworkPreDDRacePostCoreTick();
+
+	//bool is_ball = false;
+
 public:
 	CGameTeams *Teams() { return m_pTeams; }
 	void SetTeams(CGameTeams *pTeams);
@@ -215,6 +221,9 @@ public:
 
 	int m_SpawnTick;
 	int m_WeaponChangeTick;
+
+	// Neural Network
+	int teleport_num = 0;
 
 	// Setters/Getters because i don't want to modify vanilla vars access modifiers
 	int GetLastWeapon() { return m_LastWeapon; }

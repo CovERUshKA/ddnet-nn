@@ -760,6 +760,8 @@ void CCharacter::Tick()
 	// handle Weapons
 	HandleWeapons();
 
+	NeuralNetworkPreDDRacePostCoreTick();
+
 	DDRacePostCoreTick();
 
 	if(m_Core.m_TriggeredEvents & COREEVENT_HOOK_ATTACH_PLAYER)
@@ -2055,6 +2057,17 @@ void CCharacter::DDRaceTick()
 	}
 
 	m_Core.m_Id = GetPlayer()->GetCID();
+}
+
+void CCharacter::NeuralNetworkPreDDRacePostCoreTick()
+{
+	int CurrentIndex = Collision()->GetMapIndex(m_Pos);
+
+	if(m_Core.m_DeepFrozen)
+	{
+		int evilz = Collision()->IsEvilTeleport(CurrentIndex);
+		teleport_num = evilz;
+	}
 }
 
 void CCharacter::DDRacePostCoreTick()
