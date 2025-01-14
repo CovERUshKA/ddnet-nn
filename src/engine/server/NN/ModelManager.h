@@ -6,42 +6,59 @@ using namespace std;
 
 struct ModelInputInputs
 {
-	// Position of the player in the block
-	vec2 pos;
-	// Position of another bot
-	//vec2 pos_2;
+	//
+	// Local bot
+	//
+
+	// Position of the player in the area
+	vec2 bot_pos;
 	// Velocity of the bot by x and y axis
-	vec2 m_vel;
-	// Is bot on ground
-	float is_grounded;
-	// Can bot jump
-	float can_jump;
-	// Is bot using jump
-	float is_jumping;
-	
-	// 
+	vec2 bot_vel;
+
 	// HOOK
-	// 
+
 	// Is bot using hook?
-	float is_hooking;
+	float bot_is_hooking;
 	// Is bot hooked something
-	float is_grabbed;
+	float bot_is_grabbed;
 	// Is hook retracted
-	float is_retracted;
-	// Position of hook when it is nearby
-	vec2 hook_pos;
+	float bot_is_retracted;
+	// Position of hook
+	vec2 bot_hook_pos;
 	// Direction the hook is going
-	vec2 hook_dir;
+	vec2 bot_hook_dir;
 	// Hook angle according to tee at the moment
-	vec2 hook_angle;
-	// Old hook angle according to tee
-	vec2 hook_old_angle;
+	vec2 bot_hook_angle;
 
-	// Path towards the finish containing 30 steps(blocks)
-	vec2 path[30];
+	//
+	// Enemy
+	//
+	
+	// Position of the enemy in the area
+	vec2 enemy_pos;
+	// Velocity of the enemy by x and y axis
+	vec2 enemy_vel;
 
-	// Coordinate of the blocks
-	float x, y;
+	// HOOK
+
+	// Is enemy using hook?
+	float enemy_is_hooking;
+	// Is enemy hooked something
+	float enemy_is_grabbed;
+	// Is hook retracted
+	float enemy_is_retracted;
+	// Position of hook
+	vec2 enemy_hook_pos;
+	// Direction the hook is going
+	vec2 enemy_hook_dir;
+
+	//
+	// Ball
+	//
+	// Position of the ball in the area
+	vec2 ball_pos;
+	// Velocity of the enemy by x and y axis
+	vec2 ball_vel;
 };
 
 struct ModelOutput
@@ -55,10 +72,7 @@ struct ModelOutput
 	int direction;
 	// Should bot hook/hold
 	bool hook;
-	// Should bot jump
-	bool jump;
 };
-
 struct ModelManager
 {
 	int count_bots, iReplaysPerBot, batch_size;

@@ -241,8 +241,8 @@ void CNeuralNetwork::OnInit()
 		vInputInputs.resize(count_bots);
 		//vInputBlocks.resize(count_bots);
 		vOutputs.resize(count_bots);
-		vIsPreviouslyHooked.resize(count_bots);
-		vPrevHookPos.resize(count_bots);
+		//vIsPreviouslyHooked.resize(count_bots);
+		//vPrevHookPos.resize(count_bots);
 		vBotsSpawnPos.resize(count_bots);
 		//vBotsValidateSpawnPoint.resize(count_bots);
 		vBotsLastCheckPoint.resize(count_bots);
@@ -433,66 +433,38 @@ void CNeuralNetwork::PreTick()
 			// const int Index = (int)(bot_pos.y / 32 + 1) * gamelayer->m_Width + (int)(bot_pos.x / 32);
 			// const int GameIndex = pTiles[Index].m_Index;
 
-			input_inputs->pos = {bot_pos.x - (int)bot_pos.x, bot_pos.y - (int)bot_pos.y};
-			input_inputs->m_vel = bot_character_core->m_Vel / 20.f;
-			input_inputs->is_grounded = bot_character->IsGrounded();
+			input_inputs->bot_pos = {bot_pos.x - (int)bot_pos.x, bot_pos.y - (int)bot_pos.y};
+			input_inputs->bot_vel = bot_character_core->m_Vel / 20.f;
 
-			int UsedJumps = bot_character_core->m_JumpedTotal;
-			//cout << "m_Jumps: " << bot_character_core->m_Jumps << endl;
-			//cout << "m_JumpedTotal: " << bot_character_core->m_JumpedTotal << endl;
-			if(bot_character_core->m_Jumps > 1)
-			{
-				//cout << "HERE" << endl;
-				UsedJumps += !input_inputs->is_grounded;
-			}
-			input_inputs->can_jump = bot_character->IsGrounded() || (bot_character_core->m_Jumps - UsedJumps);
-			input_inputs->is_jumping = vOutputs[i].jump;
+			input_inputs->bot_is_hooking = bot_character_core->m_HookState == HOOK_FLYING || bot_character_core->m_HookState == HOOK_GRABBED;
+			input_inputs->bot_is_grabbed = bot_character_core->m_HookState == HOOK_GRABBED;
+			input_inputs->bot_is_retracted = bot_character_core->m_HookState == HOOK_RETRACTED || (bot_character_core->m_HookState >= HOOK_RETRACT_START && bot_character_core->m_HookState <= HOOK_RETRACT_END);
 
-			input_inputs->is_hooking = bot_character_core->m_HookState == HOOK_FLYING || bot_character_core->m_HookState == HOOK_GRABBED;
-			input_inputs->is_grabbed = bot_character_core->m_HookState == HOOK_GRABBED;
-			input_inputs->is_retracted = bot_character_core->m_HookState == HOOK_RETRACTED || (bot_character_core->m_HookState >= HOOK_RETRACT_START && bot_character_core->m_HookState <= HOOK_RETRACT_END);
-
-			if(input_inputs->is_hooking)
+			if(input_inputs->bot_is_hooking)
 			{
 				//printf("HJQWHEe1\n");
 				auto hook_relative = (bot_character_core->m_HookPos - bot_character_core->m_Pos) / m_pGameContext->Tuning()->m_HookLength;
 				//printf("HJQWHEe2\n");
-				input_inputs->hook_pos = vec2(clamp(hook_relative.x, -1.f, 1.f), clamp(hook_relative.y, -1.f, 1.f));
-				input_inputs->hook_dir = bot_character_core->m_HookDir;
+				input_inputs->bot_hook_pos = vec2(clamp(hook_relative.x, -1.f, 1.f), clamp(hook_relative.y, -1.f, 1.f));
+				input_inputs->bot_hook_dir = bot_character_core->m_HookDir;
 				//printf("HJQWHEe3\n");
 				auto ataned = atan2(hook_relative.y, hook_relative.x);
 				auto angle_x = cos(ataned);
 				auto angle_y = sin(ataned);
-				input_inputs->hook_angle = vec2(angle_x, angle_y);
+				input_inputs->bot_hook_angle = vec2(angle_x, angle_y);
 				//printf("HJQWHEe4\n");
-				if(vIsPreviouslyHooked[i])
-				{
-					auto hook_relative_old = vPrevHookPos[i] - bot_character->m_PrevPos;
-
-					ataned = atan2(hook_relative_old.y, hook_relative_old.x);
-					angle_x = cos(ataned);
-					angle_y = sin(ataned);
-					input_inputs->hook_old_angle = vec2(angle_x, angle_y);
-				}
-				else
-				{
-					input_inputs->hook_old_angle = vec2(0.f, 0.f);
-				}
+				
 				//printf("HJQWHEe5\n");
 
-				vIsPreviouslyHooked[i] = true;
-				vPrevHookPos[i] = bot_character_core->m_HookPos;
+				//vPrevHookPos[i] = bot_character_core->m_HookPos;
 				//printf("HJQWHEe6\n");
 			}
 			else
 			{
-				vIsPreviouslyHooked[i] = false;
-				input_inputs->hook_pos = input_inputs->hook_dir = input_inputs->hook_angle = input_inputs->hook_old_angle = vec2(0, 0);
+				//vIsPreviouslyHooked[i] = false;
+				input_inputs->bot_hook_pos = input_inputs->bot_hook_dir = input_inputs->bot_hook_angle = vec2(0, 0);
 			}
 
-			int width = 33;
-			int height = 33;
-			int block_count = 0;
 			//cout << "Starting..." << endl;
 			// decide_time = time_get_impl();
 
@@ -503,31 +475,6 @@ void CNeuralNetwork::PreTick()
 
 			vBotLastPos[i] = bot_pos;
 			vBotLastVel[i] = length(bot_character_core->m_Vel);
-
-			input_inputs->x = (int)(bot_pos.x / 32);
-			input_inputs->y = (int)(bot_pos.y / 32);
-
-			if(cur_index_x == prev_index_x && cur_index_y == prev_index_y)
-			{
-				continue;
-			}
-
-			//printf("1\n");
-
-			int filled_count = 0;
-
-			for(size_t j = 0; j < vBotsPath[i].size(); j++)
-			{
-				int x_move = vBotsPath[i][j].second;
-				int y_move = vBotsPath[i][j].first;
-				// cout << "x: " << x_move << " y: " << y_move << endl;
-				input_inputs->path[j] = vec2(x_move, y_move);
-				filled_count += 1;
-			}
-			for(size_t j = filled_count; j < sizeof(ModelInputInputs::path) / (sizeof(float) * 2); j++)
-			{
-				input_inputs->path[j] = vec2(0.f, 0.f);
-			}
 			//printf("2\n");
 
 			//for(size_t y = 0; y < height; y++)

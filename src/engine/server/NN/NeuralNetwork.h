@@ -53,8 +53,8 @@ class CNeuralNetwork : public IInterface
 	std::vector<ModelInputInputs> vInputInputs;
 	//std::vector<ModelInputBlocks> vInputBlocks;
 	std::vector<ModelOutput> vOutputs;
-	std::vector<bool> vIsPreviouslyHooked;
-	std::vector<vec2> vPrevHookPos;
+	//std::vector<bool> vIsPreviouslyHooked;
+	//std::vector<vec2> vPrevHookPos;
 
 	// First is distance, second is tick
 	std::vector<std::pair<int, int>> vBotBestDistance;
