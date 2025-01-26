@@ -335,7 +335,9 @@ void CGameWorld::Tick()
 	//printf("5: %f\n", (float)(time_get_impl() - decide_time) / (float)time_freq());
 	//decide_time = time_get_impl();
 
-	//UpdatePlayerMaps();
+	#ifndef NEURAL_NETWORK_TRAINING
+	UpdatePlayerMaps();
+	#endif
 	//printf("6: %f\n", (float)(time_get_impl() - decide_time) / (float)time_freq());
 	//decide_time = time_get_impl();
 	// find the characters' strong/weak id

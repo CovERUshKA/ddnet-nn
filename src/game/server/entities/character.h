@@ -102,7 +102,6 @@ private:
 	int m_LastWeapon;
 	int m_QueuedWeapon;
 
-	int m_ReloadTimer;
 	int m_AttackTick;
 
 	int m_DamageTaken;
@@ -167,8 +166,6 @@ private:
 
 	void NeuralNetworkPreDDRacePostCoreTick();
 
-	//bool is_ball = false;
-
 public:
 	CGameTeams *Teams() { return m_pTeams; }
 	void SetTeams(CGameTeams *pTeams);
@@ -218,12 +215,15 @@ public:
 	bool m_TeleGunTeleport;
 	bool m_IsBlueTeleGunTeleport;
 	int m_StrongWeakID;
+	int m_ReloadTimer;
 
 	int m_SpawnTick;
 	int m_WeaponChangeTick;
 
 	// Neural Network
-	int teleport_num = 0;
+	int m_TeleportNum;
+	bool m_HittedBall;
+	bool m_HookMissed;
 
 	// Setters/Getters because i don't want to modify vanilla vars access modifiers
 	int GetLastWeapon() { return m_LastWeapon; }

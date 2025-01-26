@@ -3255,6 +3255,7 @@ void CGameContext::OnInit()
 	m_pEngine = Kernel()->RequestInterface<IEngine>();
 	m_pStorage = Kernel()->RequestInterface<IStorage>();
 	m_pAntibot = Kernel()->RequestInterface<IAntibot>();
+	m_pNeuralNetwork = Kernel()->RequestInterface<CNeuralNetwork>();
 	m_pAntibot->RoundStart(this);
 	m_World.SetGameServer(this);
 	m_Events.SetGameServer(this);

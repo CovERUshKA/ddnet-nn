@@ -3,6 +3,7 @@
 #include <torch/torch.h>
 #include <c10/cuda/CUDACachingAllocator.h>
 #include <ATen/cuda/CUDAGeneratorImpl.h>
+//#include <torch/nn/options/loss.h>
 #include <random>
 
 #include "Models.h"
@@ -29,14 +30,26 @@ class PPO
 public:
     //static auto returns(VT& rewards, VT& dones, VT& vals, double gamma, double lambda) -> VT; // Generalized advantage estimate, https://arxiv.org/abs/1506.02438
 	static auto Initilize(size_t batch_size, size_t count_players) -> void;
+
 	static auto update(ActorCritic &ac, ActorCritic &ac_work,
-	    std::shared_ptr<torch::optim::Adam> &opt, 
-                       uint steps, uint epochs, uint mini_batch_size, uint count_mini_batches, double beta, float gamma, float lambda, c10::DeviceType device, double &avg_training_loss, double &avg_actor_loss, double &avg_critic_loss, double clip_param = .2) -> void;
+		std::shared_ptr<torch::optim::Adam> &opt,
+		uint steps, uint epochs, uint mini_batch_size, uint count_mini_batches,
+		double ent_coef, float gamma, float lambda, c10::DeviceType device,
+		double &avg_training_loss, double &avg_actor_loss, double &avg_critic_loss,
+		double &avg_entropy,
+		double &avg_actor_grad_norm, double &avg_critic_grad_norm,
+		double &avg_actor_weight_norm, double &avg_critic_weight_norm,
+		double &avg_actor_activation_mean, double &avg_actor_activation_std,
+		double &critic_mean_absolute_error, double &critic_correlation_coefficient,
+		double clip_param = .2) -> void;
+
     static auto save_replay(torch::Tensor &state,
 	    torch::Tensor &action,
 	    torch::Tensor &log_prob,
 	    std::vector<float> &reward,
+		std::vector<bool> &accumulation_reset,
 	    std::vector<bool> &done,
+		std::vector<bool> &mask,
 	    bool &is_full) -> void;
     static auto count_of_replays() -> size_t;
     static auto count_of_episodes() -> size_t;
@@ -52,17 +65,18 @@ public:
 	{
 		//dones.resize(capacity);
 		//rewards.resize(capacity);
-		states = torch::empty({(long long)capacity, 33}, torch::kCUDA);
-		actions = torch::empty({(long long)capacity, 7}, torch::kCUDA);
-		log_probs = torch::empty({(long long)capacity, 7}, torch::kCUDA);
+		states = torch::empty({(long long)capacity, 40}, torch::kCUDA);
+		actions = torch::empty({(long long)capacity, 5}, torch::kCUDA);
+		log_probs = torch::empty({(long long)capacity, 5}, torch::kCUDA);
 		values = torch::empty({(long long)capacity, 1}, torch::kCUDA);
 		returns = torch::empty({(long long)capacity, 1}, torch::kCUDA);
 		//v_all_indices.resize(capacity);
 		players_states.resize(count_players);
 		players_actions.resize(count_players);
 		players_log_probs.resize(count_players);
-		players_dones.resize(count_players);
 		players_rewards.resize(count_players);
+		players_accumulation_resets.resize(count_players);
+		players_dones.resize(count_players);
 
 		//local_cuda_gen = torch::make_generator<torch::CUDAGeneratorImpl>();
 		//auto cuda_gen = check_generator<CUDAGeneratorImpl>(gen);
@@ -76,7 +90,7 @@ public:
 		all_indices = torch::arange(0, capacity, torch::kCUDA);
 	}
 
-	void add(const torch::Tensor &state, const torch::Tensor &action, const torch::Tensor &log_prob, std::vector<float> &reward, std::vector<bool> &done, bool& is_full)
+	void add(const torch::Tensor &state, const torch::Tensor &action, const torch::Tensor &log_prob, std::vector<float> &reward, std::vector<bool> &accumulation_reset, std::vector<bool> &done, std::vector<bool> &mask, bool &is_full)
 	{
 		//torch::NoGradGuard no_grad;
 		/*if(buffer.size() == capacity)
@@ -96,13 +110,18 @@ public:
 		std::cout << reward.sizes() << std::endl;
 		std::cout << advantage.sizes() << std::endl;*/
 
-		for(size_t i = 0; i < count_players; i++)
+		//int log_prob_counter = 0;
+		for(size_t i = 0; i < reward.size(); i++)
 		{
+			if (!mask[i])
+				continue;
 			players_states[i].push_back(state[i]);
 			players_actions[i].push_back(action[i]);
-			players_log_probs[i].push_back(log_prob[i]);
+			players_log_probs[i].push_back(log_prob[i]); // log_prob_counter
 			this->players_dones[i].push_back(done[i]);
+			this->players_accumulation_resets[i].push_back(accumulation_reset[i]);
 			this->players_rewards[i].push_back(reward[i]);
+			//log_prob_counter += 1;
 			if(done[i])
 			{
 				if(capacity() - dones.size() >= players_states[i].size())
@@ -135,6 +154,8 @@ public:
 
 					rewards.insert(rewards.end(), players_rewards[i].begin(), players_rewards[i].end());
 					players_rewards[i].clear();
+					accumulation_resets.insert(accumulation_resets.end(), players_accumulation_resets[i].begin(), players_accumulation_resets[i].end());
+					players_accumulation_resets[i].clear();
 					dones.insert(dones.end(), players_dones[i].begin(), players_dones[i].end());
 					players_dones[i].clear();
 					//printf("Saved.\n");
@@ -195,6 +216,7 @@ public:
 		this->players_actions[id].clear();
 		this->players_log_probs[id].clear();
 		this->players_dones[id].clear();
+		this->players_accumulation_resets[id].clear();
 		this->players_rewards[id].clear();
 
 		return;
@@ -215,6 +237,7 @@ public:
 	    //rewards_concat = torch::Tensor();
 		//dones_concat = torch::Tensor();
 		rewards.clear();
+	    accumulation_resets.clear();
 		dones.clear();
 		count_episodes = last_index = last_episode_index = last_values_and_returns_index = 0;
 	    //advantages.clear();
@@ -225,6 +248,7 @@ public:
 			this->players_actions[i].clear();
 			this->players_log_probs[i].clear();
 		    this->players_dones[i].clear();
+			this->players_accumulation_resets[i].clear();
 		    this->players_rewards[i].clear();
 	    }
 	    //v_all_indices.clear();
@@ -273,9 +297,11 @@ public:
 		torch::Tensor& actions_ret,
 		torch::Tensor& log_probs_ret,
 		std::vector<float>& rewards_ret,
+	    std::vector<bool> &accumulation_resets_ret,
 		std::vector<bool>& dones_ret)
 	{
 		std::vector<float> rewards_concat_ret;
+		std::vector<bool> accumulation_resets_concat_ret;
 		std::vector<bool> dones_concat_ret;
 		torch::Tensor states_concatenated_ret, actions_concat_ret, log_probs_concat_ret;
 
@@ -290,7 +316,7 @@ public:
 			return false;
 		}
 		// printf("1\n");
-		for(size_t i = end - 1; i > start; i--)
+		for(size_t i = end - 1; i < size(); i++)
 		{
 			if(dones[i])
 			{
@@ -323,6 +349,7 @@ public:
 		// printf("ended\n");
 		// advantages_concat = advantages_concat.index({torch::indexing::Slice(start, end)});
 		rewards_concat_ret = std::vector<float>(rewards.begin() + start, rewards.begin() + end);
+		accumulation_resets_concat_ret = std::vector<bool>(accumulation_resets.begin() + start, accumulation_resets.begin() + end);
 		dones_concat_ret = std::vector<bool>(dones.begin() + start, dones.begin() + end);
 		/*std::cout << "States size: " << states_concatenated.sizes() << std::endl;
 		std::cout << "Actions size: " << actions_concat.sizes() << std::endl;
@@ -337,6 +364,7 @@ public:
 		actions_ret = actions_concat_ret;
 		log_probs_ret = log_probs_concat_ret;
 		rewards_ret = rewards_concat_ret;
+		accumulation_resets_ret = accumulation_resets_concat_ret;
 		dones_ret = dones_concat_ret;
 		return true;
 	}
@@ -344,6 +372,52 @@ public:
 	void clear_last_sample_index_counter()
 	{
 		last_index = 0;
+	}
+
+	// MAE - Mean Absolute Error
+	// float mae = 0.0f;
+	// for(size_t i = 0; i < critic_predictions.size(); ++i)
+	// {
+	//     mae += std::abs(critic_predictions[i] - actual_returns[i]);
+	// }
+	// mae /= critic_predictions.size();
+	//
+	//
+	double get_mae()
+	{
+		double mae = 0.0f;
+
+		// Compute MAE directly without intermediate tensors
+		mae = torch::nn::functional::l1_loss(values, returns, torch::nn::L1LossOptions().reduction(torch::kMean))
+			      .item<double>();
+
+		return mae;
+	}
+
+	// Correlation coefficient
+	// Between values and actual returns
+	float get_correlation_coefficient()
+	{
+		// Ensure inputs are 1D and have the same size
+		if(values.dim() != returns.dim() || returns.size(0) != values.size(0))
+		{
+			throw std::invalid_argument("Inputs must be with same dimensions of tensors of the same size.");
+		}
+
+		// Compute means
+		float mean_values = values.mean().item<float>();
+		float mean_returns = returns.mean().item<float>();
+
+		// Compute covariance
+		auto cov = ((values - mean_values) * (returns - mean_returns)).mean().item<float>();
+
+		// Compute standard deviations
+		float std_values = values.std().item<float>();
+		float std_returns = returns.std().item<float>();
+
+		// Compute correlation coefficient
+		float r = cov / (std_values * std_returns);
+		return r;
 	}
 
 	bool next_sample(
@@ -408,7 +482,7 @@ public:
 		{
 			return false;
 		}
-		for(size_t i = end - 1; i > start; i--)
+		for(size_t i = end - 1; i < size(); i++)
 		{
 			if(dones[i])
 			{
@@ -480,9 +554,10 @@ private:
 	//torch::Tensor states_concatenated_reshaped, actions_concat_reshaped, log_probs_concat_reshaped;
 	//std::vector<int64_t> v_all_indices;
 	std::vector<float> rewards;
+	std::vector<bool> accumulation_resets;
 	std::vector<bool> dones;
 	std::vector<std::vector<float>> players_rewards;
-	std::vector<std::vector<bool>> players_dones;
+	std::vector<std::vector<bool>> players_dones, players_accumulation_resets;
 	std::vector<std::vector<torch::Tensor>> players_states, players_actions, players_log_probs;
 
 	//std::mt19937 generator{std::random_device{}()};
@@ -519,8 +594,7 @@ torch::Tensor compute_advantages(ActorCritic &ac, const torch::Tensor &returns, 
 
 std::vector<float> tensor_to_vector(const torch::Tensor &tensor)
 {
-	auto tensor_cpu = tensor.to(torch::kCPU, true);
-	at::cuda::stream_synchronize(at::cuda::getCurrentCUDAStream());
+	auto tensor_cpu = tensor.to(torch::kCPU);
 
 	// Ensure the tensor is of type float and is contiguous
 	torch::Tensor contiguous_tensor = tensor_cpu.contiguous();
@@ -570,7 +644,7 @@ std::vector<float> standardize_rewards(const std::vector<float> &rewards)
 	return standardized_rewards;
 }
 
-torch::Tensor calculate_returns(std::vector<float> &rewards, std::vector<bool> &dones, const torch::Tensor &values, float gamma, float lambda)
+torch::Tensor calculate_returns(std::vector<float> &rewards, std::vector<bool> &accumulation_resets, std::vector<bool> &dones, const torch::Tensor &values, float gamma, float lambda)
 {
 	//printf("FINNNN1.1\n");
 
@@ -584,11 +658,11 @@ torch::Tensor calculate_returns(std::vector<float> &rewards, std::vector<bool> &
 	{
 		float delta = 0;
 		if(i == rewards.size() - 1)
-			delta = rewards[i] + gamma * vValues[i] * (1 - dones[i]) - vValues[i];
+			delta = rewards[i] + gamma * vValues[i] * (1 - (dones[i] || accumulation_resets[i])) - vValues[i];
 		else
-			delta = rewards[i] + gamma * vValues[i + 1] * (1 - dones[i]) - vValues[i];
+			delta = rewards[i] + gamma * vValues[i + 1] * (1 - (dones[i] || accumulation_resets[i])) - vValues[i];
 
-		gae = delta + gamma * lambda * (1 - dones[i]) * gae;
+		gae = delta + gamma * lambda * (1 - (dones[i] || accumulation_resets[i])) * gae;
 		// printf("FINNNN1.4\n");
 		// G = rewards[i] + gamma * G;
 		// std::cout << G.item<float>() << std::endl;
@@ -634,11 +708,13 @@ auto PPO::save_replay(torch::Tensor& state,
     torch::Tensor& action,
     torch::Tensor& log_prob,
     std::vector<float> &reward,
+	std::vector<bool> &accumulation_reset,
 	std::vector<bool> &done,
+	std::vector<bool> &mask,
 	bool &is_full) -> void
 {
 	//torch::NoGradGuard no_grad;
-	replay_buffer->add(state, action, log_prob, reward, done, is_full);
+	replay_buffer->add(state, action, log_prob, reward, accumulation_reset, done, mask, is_full);
 }
 
 auto PPO::erase_player_replays(int id) -> void
@@ -659,11 +735,27 @@ auto PPO::count_of_episodes() -> size_t
 
 auto PPO::update(ActorCritic &ac, ActorCritic &ac_work,
 	std::shared_ptr<torch::optim::Adam> &opt,
-	uint steps, uint epochs, uint mini_batch_size, uint count_mini_batches, double beta, float gamma, float lambda, c10::DeviceType device, double &avg_training_loss, double &avg_actor_loss, double &avg_critic_loss, double clip_param) -> void
+	uint steps, uint epochs, uint mini_batch_size, uint count_mini_batches,
+	double ent_coef, float gamma, float lambda, c10::DeviceType device,
+	double &avg_training_loss, double &avg_actor_loss, double &avg_critic_loss,
+	double &avg_entropy,
+	double &avg_actor_grad_norm, double &avg_critic_grad_norm,
+	double &avg_actor_weight_norm, double &avg_critic_weight_norm,
+	double &avg_actor_activation_mean, double &avg_actor_activation_std,
+	double &critic_mean_absolute_error, double &critic_correlation_coefficient,
+	double clip_param) -> void
 {
 	torch::Tensor total_loss_tensor = torch::zeros({}, torch::kCUDA); // Initialize tensor to accumulate loss
-	torch::Tensor total_actor_loss_tensor = torch::zeros({}, torch::kCUDA); // Initialize tensor to accumulate loss
-	torch::Tensor total_critic_loss_tensor = torch::zeros({}, torch::kCUDA); // Initialize tensor to accumulate loss
+	torch::Tensor total_actor_loss_tensor = torch::zeros({}, torch::kCUDA); // Initialize tensor to accumulate actor loss
+	torch::Tensor total_critic_loss_tensor = torch::zeros({}, torch::kCUDA); // Initialize tensor to accumulate critic loss
+	torch::Tensor total_entropy_tensor = torch::zeros({}, torch::kCUDA); // Initialize tensor to accumulate entropy
+
+	torch::Tensor total_actor_grad_norm = torch::zeros({}, torch::kCUDA);
+	torch::Tensor total_critic_grad_norm = torch::zeros({}, torch::kCUDA);
+	torch::Tensor total_actor_weight_norm = torch::zeros({}, torch::kCUDA);
+	torch::Tensor total_critic_weight_norm = torch::zeros({}, torch::kCUDA);
+	torch::Tensor total_actor_activation_mean = torch::zeros({}, torch::kCUDA);
+	torch::Tensor total_actor_activation_std = torch::zeros({}, torch::kCUDA);
 
 	auto saved_size = replay_buffer->size();
 	size_t count_updates = 0;
@@ -730,22 +822,20 @@ auto PPO::update(ActorCritic &ac, ActorCritic &ac_work,
 		//opt->zero_grad();
 		torch::Tensor states, actions, log_probs;
 		std::vector<float> rewards;
+		std::vector<bool> accumulation_resets;
 		std::vector<bool> dones;
 		//printf("Calculating GAE of episodes...");
-		while(replay_buffer->next_episodes(mini_batch_size, states, actions, log_probs, rewards, dones))
+		while(replay_buffer->next_episodes(mini_batch_size, states, actions, log_probs, rewards, accumulation_resets, dones))
 		{
-			//torch::Tensor cpy_inputs = states.index({"...", torch::indexing::Slice(0, 78)});
-			// printf("UPDATING0.3\n");
-			//torch::Tensor cpy_blocks = torch::one_hot(states.index({"...", torch::indexing::Slice(78, 1167)}).to(torch::kInt64), 3).to(torch::kF32).view({(long long)states.size(0), -1});
-			// printf("UPDATING0.4\n");
-			//states = torch::cat({cpy_inputs, cpy_blocks}, 1);
 			torch::Tensor cpy_values = ac_work->critic_forward(states).detach();
 
-			auto returns = calculate_returns(rewards, dones, cpy_values, gamma, lambda);
+			auto returns = calculate_returns(rewards, accumulation_resets, dones, cpy_values, gamma, lambda);
 
 			replay_buffer->upload_values_and_returns(cpy_values, returns);
 		}
 		//printf(" done!\n");
+		critic_mean_absolute_error = replay_buffer->get_mae();
+		critic_correlation_coefficient = replay_buffer->get_correlation_coefficient();
 		
 		for(size_t i = 0; i < epochs; i++)
 		{
@@ -755,108 +845,57 @@ auto PPO::update(ActorCritic &ac, ActorCritic &ac_work,
 			torch::Tensor returns;
 			while(replay_buffer->next_sample(mini_batch_size, states, actions, log_probs, values, returns))
 			{
-				// c10::cuda::CUDACachingAllocator::emptyCache();
-				// auto decide_time = std::chrono::high_resolution_clock::now();
-				torch::Tensor states_cpy = states;
-				torch::Tensor actions_cpy = actions;
-				torch::Tensor log_probs_cpy = log_probs.detach();
+				//torch::Tensor states_cpy = states;
+				//torch::Tensor log_probs_cpy = log_probs.detach();
 
-				// Generate random indices.
-				/*torch::Tensor cpy_sta = torch::zeros({mini_batch_size, states.size(1)}, states.options());
-				torch::Tensor cpy_act = torch::zeros({mini_batch_size, actions.size(1)}, actions.options());
-				torch::Tensor cpy_log = torch::zeros({mini_batch_size, log_probs.size(1)}, log_probs.options());
-				torch::Tensor cpy_ret = torch::zeros({mini_batch_size, returns.size(1)}, returns.options());
-				torch::Tensor cpy_adv = torch::zeros({mini_batch_size, advantages.size(1)}, advantages.options());*/
-				// printf("UPDATING0\n");
-				// auto [states, actions, log_probs, rewards, dones] = replay_buffer->sample(mini_batch_size);
-				// std::vector<torch::Tensor> states, actions, log_probs, rewards;
-				// std::vector<bool> dones;
-				//   for(const auto &[state, action, log_prob, reward, done, advantage] : batch)
-				//   {
-				//    states.push_back(state);
-				//    actions.push_back(action);
-				//    log_probs.push_back(log_prob);
-				//	rewards.push_back(reward);
-				//    dones.insert(dones.end(), done.begin(), done.end());
-				//    //advantages.push_back(advantage);
-				//    //std::cout << log_prob.sizes() << std::endl;
-				//   }
-				// printf("UPDATING0.1\n");
-
-				torch::Tensor cpy_sta = states_cpy;
-				// std::cout << cpy_sta.sizes() << std::endl;
-				// printf("UPDATING0.2\n");
-
-				// torch::Tensor cpy_inputs = cpy_sta.index({"...", torch::indexing::Slice(0, 78)});
-				//// printf("UPDATING0.3\n");
-				// torch::Tensor cpy_blocks = torch::one_hot(cpy_sta.index({"...", torch::indexing::Slice(78, 1167)}).to(torch::kInt64), 3).to(torch::kF32).view({(long long)cpy_sta.size(0), -1});
-				////// printf("UPDATING0.4\n");
-				// cpy_sta = torch::cat({cpy_inputs, cpy_blocks}, 1);
-				cpy_sta = states_cpy;
+				torch::Tensor cpy_sta = states;
+			
+				//cpy_sta = states_cpy;
 				// torch::Tensor cpy_values = ac_work->critic_forward(cpy_sta).detach();
 				torch::Tensor cpy_values = values;
 
 				// std::cout << cpy_sta.sizes() << std::endl;
 				// printf("UPDATING0.1.1\n");
-				torch::Tensor cpy_act = actions_cpy;
+				torch::Tensor cpy_act = actions;
 				// printf("UPDATING0.1.2\n");
-				torch::Tensor cpy_log = log_probs_cpy;
-				// printf("UPDATING0.1.3\n");
-				//  auto catted = torch::cat(rewards).reshape({mini_batch_size, 1});
-				//  printf("UPDATING0.1.3.1\n");
-				//  std::cout << catted.sizes() << std::endl;
-				// printf("UPDATING0.1.3.2\n");
-				// std::cout << dones_cpy.sizes() << std::endl;
-				// std::cout << dones_cpy << std::endl;
-				// printf("3\n");
-				// Sleep(7000);
-				// std::cout << cpy_values << std::endl;
-				// auto returnsee = calculate_returns(rewards, dones, cpy_values, gamma, lambda);
-				// auto now = std::chrono::high_resolution_clock::now();
-				// std::cout << "Time to prepare: " << (float)(std::chrono::duration_cast<std::chrono::milliseconds>(now - decide_time).count()) << std::endl;
-
-				// std::cout << returnsee.sizes() << std::endl;
-				// std::cout << returnsee << std::endl;
-				// auto decide_time = std::chrono::high_resolution_clock::now();
+				torch::Tensor cpy_log = log_probs.detach();
 
 				torch::Tensor cpy_ret = returns; // normalize_rewards(returnsee);
-				// std::cout << cpy_ret << std::endl;
-
-				// printf("UPDATING0.1.4\n");
-				// printf("UPDATING0.1.5\n");
-				// std::cout << val.sizes() << std::endl;
+				
 				torch::Tensor cpy_adv = compute_advantages(ac, cpy_ret, cpy_values /*cpy_sta.view({cpy_sta.size(0), 1, 4372})*/);
-				// std::cout << cpy_ret << std::endl;
-
-				/*for (uint b=0;b<mini_batch_size;b++) {
-
-					uint idx = std::uniform_int_distribution<uint>(0, steps-1)(re);
-					cpy_sta[b] = states[idx];
-					cpy_act[b] = actions[idx];
-					cpy_log[b] = log_probs[idx];
-					cpy_ret[b] = returns[idx];
-					cpy_adv[b] = advantages[idx];
-				}*/
 
 				// printf("UPDATING1.1\n");
-				auto action = ac->actor_forward(cpy_sta);
-				// printf("4\n");
-				// Sleep(7000);
-				//  printf("33.0\n");
-				//  std::cout << action.sizes() << std::endl;
-				//  std::cout << cpy_act.sizes() << std::endl;
-				//  auto bb = ac->normal_actor(action);
-				//  auto av = ac->forward(cpy_sta); // action value pairs
-				//  printf("UPDATING1.2\n");
-				//  auto action = std::get<0>(av);
-				auto entropy = ac->entropy().mean();
+				torch::Tensor action = ac->actor_forward(cpy_sta);
+				//printf("4\n");
+				//Sleep(3000);
+				//std::cout << action.slice(0, 0, 10) << std::endl;
+				torch::Tensor entropy = ac->entropy(action).mean();
+				//std::cout << action.slice(0, 0, 10) << std::endl;
+
+				//printf("calculated\n");
+
+				//Sleep(6000);
+
+				//std::cout << entropy << std::endl;
 				// printf("UPDATING1.3\n");
-				auto new_log_prob = ac->log_prob(cpy_act);
+				torch::Tensor new_log_prob = ac->log_prob(action, cpy_act);
+				//printf("calculated\n");
+				//Sleep(6000);
 				// printf("UPDATING1.4\n");
-				auto old_log_prob = cpy_log;
+				torch::Tensor old_log_prob = cpy_log;
+				//std::cout << old_log_prob.slice(0 ,0, 10) << std::endl;
+				//std::cout << "New log prob mean: " << new_log_prob.mean().item<double>() << ", std: " << new_log_prob.std().item<double>() << std::endl;
+				//std::cout << "Old log prob mean: " << old_log_prob.mean().item<double>() << ", std: " << old_log_prob.std().item<double>() << std::endl;
+				//std::cout << "New log prob min: " << new_log_prob.min().item<double>() << ", max: " << new_log_prob.max().item<double>() << std::endl;
+				//std::cout << "Old log prob min: " << old_log_prob.min().item<double>() << ", max: " << old_log_prob.max().item<double>() << std::endl;
+				//std::cout << "Begin" << std::endl;
+				//std::cout << new_log_prob.slice(0, 0, 10) << std::endl;
+				//std::cout << old_log_prob.slice(0, 0, 10) << std::endl;
 				// printf("UPDATING1.4.1\n");
 				//  std::cout << new_log_prob.sizes() << " " << old_log_prob.sizes() << std::endl;
 				auto ratio = (new_log_prob - old_log_prob).exp();
+				//std::cout << "Ratio mean: " << ratio.mean().item<double>() << ", std: " << ratio.std().item<double>() << std::endl;
+				//std::cout << "Ratio min: " << ratio.min().item<double>() << ", max: " << ratio.max().item<double>() << std::endl;
 				// printf("UPDATING1.5\n");
 				//  std::cout << ratio.sizes() << std::endl;
 				//  std::cout << cpy_adv.sizes() << std::endl;
@@ -873,8 +912,8 @@ auto PPO::update(ActorCritic &ac, ActorCritic &ac_work,
 				// printf("UPDATING1.7\n");
 				auto critic_loss = torch::nn::functional::mse_loss(val, cpy_ret); //(cpy_ret - val).pow(2).mean();
 				// printf("UPDATING1.8\n");
-				auto loss = 0.5 * critic_loss + actor_loss - beta * entropy;
-				loss /= count_mini_batches;
+				auto loss = 0.5 * critic_loss + actor_loss - ent_coef * entropy;
+				//loss /= count_mini_batches;
 
 				// printf("UPDATING1.9\n");
 				//  std::cout << "Actor Loss: " << actor_loss.item<double>() << ", Critic Loss: " << critic_loss.item<double>() << std::endl;
@@ -886,8 +925,50 @@ auto PPO::update(ActorCritic &ac, ActorCritic &ac_work,
 				}
 				catch(const std::exception &e)
 				{
-					std::cerr << "Exception during backward pass: " << e.what() << std::endl;
+					std::cout << "Exception during backward pass: " << e.what() << std::endl;
 				}
+
+				// Compute gradient norms
+				double actor_grad_norm = 0.0;
+				double critic_grad_norm = 0.0;
+				for(const auto &param : ac->actor_parameters())
+				{
+					if(param.grad().defined())
+					{
+						actor_grad_norm += param.grad().norm().item<double>();
+					}
+				}
+				for(const auto &param : ac->critic_parameters())
+				{
+					if(param.grad().defined())
+					{
+						critic_grad_norm += param.grad().norm().item<double>();
+					}
+				}
+				total_actor_grad_norm += actor_grad_norm;
+				total_critic_grad_norm += critic_grad_norm;
+
+				// Compute weight norms
+				double actor_weight_norm = 0.0;
+				double critic_weight_norm = 0.0;
+				for(const auto &param : ac->actor_parameters())
+				{
+					actor_weight_norm += param.norm().item<double>();
+				}
+				for(const auto &param : ac->critic_parameters())
+				{
+					critic_weight_norm += param.norm().item<double>();
+				}
+				total_actor_weight_norm += actor_weight_norm;
+				total_critic_weight_norm += critic_weight_norm;
+
+				// Compute activation statistics
+				auto actor_activations = ac->actor_forward(cpy_sta);
+				auto actor_activation_mean = actor_activations.mean().item<double>();
+				auto actor_activation_std = actor_activations.std().item<double>();
+				total_actor_activation_mean += actor_activation_mean;
+				total_actor_activation_std += actor_activation_std;
+
 				count_mini_batches_processed += 1;
 				if(count_mini_batches_processed == count_mini_batches)
 				{
@@ -895,29 +976,181 @@ auto PPO::update(ActorCritic &ac, ActorCritic &ac_work,
 					opt->zero_grad();
 					count_mini_batches_processed = 0;
 				}
+				if(ac->log_std_.isnan().any().item<bool>() || ac->log_std_.isinf().any().item<bool>())
+				{
+					std::cout << "Nan or inf detected in log_std_ after opt->step()" << std::endl;
+					std::cout << states.sizes() << std::endl;
+					std::cout << actions.sizes() << std::endl;
+					std::cout << log_probs.sizes() << std::endl;
+					std::cout << values.sizes() << std::endl;
+					std::cout << returns.sizes() << std::endl;
+					std::cout << entropy << std::endl;
+					std::cout << actor_loss << std::endl;
+					std::cout << critic_loss << std::endl;
+					std::cout << loss << std::endl;
+					std::cout << "States - Mean: " << states.mean().item<double>()
+						  << ", Std: " << states.std().item<double>()
+						  << ", Min: " << states.min().item<double>()
+						  << ", Max: " << states.max().item<double>()
+						  << ", NaN Count: " << torch::isnan(states).sum().item<int64_t>()
+						  << ", Inf Count: " << torch::isinf(states).sum().item<int64_t>() << std::endl;
+					std::cout << "States (First 5 elements): " << states.index({torch::indexing::Slice(0, 5)}) << std::endl;
+
+					std::cout << "Actions - Mean: " << actions.mean().item<double>()
+						  << ", Std: " << actions.std().item<double>()
+						  << ", Min: " << actions.min().item<double>()
+						  << ", Max: " << actions.max().item<double>()
+						  << ", NaN Count: " << torch::isnan(actions).sum().item<int64_t>()
+						  << ", Inf Count: " << torch::isinf(actions).sum().item<int64_t>() << std::endl;
+
+					std::cout << "Values - Mean: " << values.mean().item<double>()
+						  << ", Std: " << values.std().item<double>()
+						  << ", Min: " << values.min().item<double>()
+						  << ", Max: " << values.max().item<double>()
+						  << ", NaN Count: " << torch::isnan(values).sum().item<int64_t>()
+						  << ", Inf Count: " << torch::isinf(values).sum().item<int64_t>() << std::endl;
+
+					std::cout << "Returns - Mean: " << returns.mean().item<double>()
+						  << ", Std: " << returns.std().item<double>()
+						  << ", Min: " << returns.min().item<double>()
+						  << ", Max: " << returns.max().item<double>()
+						  << ", NaN Count: " << torch::isnan(returns).sum().item<int64_t>()
+						  << ", Inf Count: " << torch::isinf(returns).sum().item<int64_t>() << std::endl;
+
+					std::cout << "Old Log Prob - Mean: " << old_log_prob.mean().item<double>()
+						  << ", Std: " << old_log_prob.std().item<double>()
+						  << ", Min: " << old_log_prob.min().item<double>()
+						  << ", Max: " << old_log_prob.max().item<double>() << std::endl;
+
+					std::cout << "New Log Prob - Mean: " << new_log_prob.mean().item<double>()
+						  << ", Std: " << new_log_prob.std().item<double>()
+						  << ", Min: " << new_log_prob.min().item<double>()
+						  << ", Max: " << new_log_prob.max().item<double>() << std::endl;
+
+					std::cout << "Advantages - Mean: " << cpy_adv.mean().item<double>()
+						  << ", Std: " << cpy_adv.std().item<double>()
+						  << ", Min: " << cpy_adv.min().item<double>()
+						  << ", Max: " << cpy_adv.max().item<double>() << std::endl;
+
+					for(const auto &param : ac->actor_parameters())
+					{
+						if(param.grad().defined())
+						{
+							std::cout << "Actor Grad - Mean: " << param.grad().mean().item<double>()
+								  << ", Std: " << param.grad().std().item<double>()
+								  << ", Min: " << param.grad().min().item<double>()
+								  << ", Max: " << param.grad().max().item<double>() << std::endl;
+						}
+					}
+
+					std::cout << "Entropy: " << entropy.item<double>()
+						  << ", Log Std - Mean: " << ac->log_std_.mean().item<double>()
+						  << ", Std: " << ac->log_std_.std().item<double>()
+						  << ", Min: " << ac->log_std_.min().item<double>()
+						  << ", Max: " << ac->log_std_.max().item<double>() << std::endl;
+
+					auto clipped_ratio = torch::clamp(ratio, 1. - clip_param, 1. + clip_param);
+					std::cout << "Clipped Ratio - Mean: " << clipped_ratio.mean().item<double>()
+						  << ", Std: " << clipped_ratio.std().item<double>()
+						  << ", Min: " << clipped_ratio.min().item<double>()
+						  << ", Max: " << clipped_ratio.max().item<double>() << std::endl;
+					system("PAUSE");
+				}
+				if(ac->actor_network->parameters()[0].isnan().any().item<bool>() || ac->actor_network->parameters()[0].isinf().any().item<bool>())
+				{
+					std::cout << "Nan or inf detected in actor_network parameters" << std::endl;
+					std::cout << states.sizes() << std::endl;
+					std::cout << actions.sizes() << std::endl;
+					std::cout << log_probs.sizes() << std::endl;
+					std::cout << values.sizes() << std::endl;
+					std::cout << returns.sizes() << std::endl;
+					std::cout << entropy << std::endl;
+					std::cout << actor_loss << std::endl;
+					std::cout << critic_loss << std::endl;
+					std::cout << loss << std::endl;
+					std::cout << "States - Mean: " << states.mean().item<double>()
+						  << ", Std: " << states.std().item<double>()
+						  << ", Min: " << states.min().item<double>()
+						  << ", Max: " << states.max().item<double>()
+						  << ", NaN Count: " << torch::isnan(states).sum().item<int64_t>()
+						  << ", Inf Count: " << torch::isinf(states).sum().item<int64_t>() << std::endl;
+					std::cout << "States (First 5 elements): " << states.index({torch::indexing::Slice(0, 5)}) << std::endl;
+
+					std::cout << "Actions - Mean: " << actions.mean().item<double>()
+						  << ", Std: " << actions.std().item<double>()
+						  << ", Min: " << actions.min().item<double>()
+						  << ", Max: " << actions.max().item<double>()
+						  << ", NaN Count: " << torch::isnan(actions).sum().item<int64_t>()
+						  << ", Inf Count: " << torch::isinf(actions).sum().item<int64_t>() << std::endl;
+
+					std::cout << "Values - Mean: " << values.mean().item<double>()
+						  << ", Std: " << values.std().item<double>()
+						  << ", Min: " << values.min().item<double>()
+						  << ", Max: " << values.max().item<double>()
+						  << ", NaN Count: " << torch::isnan(values).sum().item<int64_t>()
+						  << ", Inf Count: " << torch::isinf(values).sum().item<int64_t>() << std::endl;
+
+					std::cout << "Returns - Mean: " << returns.mean().item<double>()
+						  << ", Std: " << returns.std().item<double>()
+						  << ", Min: " << returns.min().item<double>()
+						  << ", Max: " << returns.max().item<double>()
+						  << ", NaN Count: " << torch::isnan(returns).sum().item<int64_t>()
+						  << ", Inf Count: " << torch::isinf(returns).sum().item<int64_t>() << std::endl;
+
+					std::cout << "Old Log Prob - Mean: " << old_log_prob.mean().item<double>()
+						  << ", Std: " << old_log_prob.std().item<double>()
+						  << ", Min: " << old_log_prob.min().item<double>()
+						  << ", Max: " << old_log_prob.max().item<double>() << std::endl;
+
+					std::cout << "New Log Prob - Mean: " << new_log_prob.mean().item<double>()
+						  << ", Std: " << new_log_prob.std().item<double>()
+						  << ", Min: " << new_log_prob.min().item<double>()
+						  << ", Max: " << new_log_prob.max().item<double>() << std::endl;
+
+					std::cout << "Advantages - Mean: " << cpy_adv.mean().item<double>()
+						  << ", Std: " << cpy_adv.std().item<double>()
+						  << ", Min: " << cpy_adv.min().item<double>()
+						  << ", Max: " << cpy_adv.max().item<double>() << std::endl;
+
+					for(const auto &param : ac->actor_parameters())
+					{
+						if(param.grad().defined())
+						{
+							std::cout << "Actor Grad - Mean: " << param.grad().mean().item<double>()
+								  << ", Std: " << param.grad().std().item<double>()
+								  << ", Min: " << param.grad().min().item<double>()
+								  << ", Max: " << param.grad().max().item<double>() << std::endl;
+						}
+					}
+
+					std::cout << "Entropy: " << entropy.item<double>()
+						  << ", Log Std - Mean: " << ac->log_std_.mean().item<double>()
+						  << ", Std: " << ac->log_std_.std().item<double>()
+						  << ", Min: " << ac->log_std_.min().item<double>()
+						  << ", Max: " << ac->log_std_.max().item<double>() << std::endl;
+
+					auto clipped_ratio = torch::clamp(ratio, 1. - clip_param, 1. + clip_param);
+					std::cout << "Clipped Ratio - Mean: " << clipped_ratio.mean().item<double>()
+						  << ", Std: " << clipped_ratio.std().item<double>()
+						  << ", Min: " << clipped_ratio.min().item<double>()
+						  << ", Max: " << clipped_ratio.max().item<double>() << std::endl;
+					system("PAUSE");
+
+				}
 				// torch::nn::utils::clip_grad_norm_(ac->parameters(), 1.0); // Clip gradients
 				// printf("UPDATING1.11\n");
 				// bb = ac->normal_actor(action);
 
 				// printf("UPDATING1.12\n");
-				// total_loss += loss.item<double>();
-				total_actor_loss_tensor += actor_loss;
-				total_critic_loss_tensor += critic_loss;
-				total_loss_tensor += loss;
+				total_actor_loss_tensor += actor_loss.detach();
+				total_critic_loss_tensor += critic_loss.detach();
+				total_loss_tensor += loss.detach();
+				total_entropy_tensor += entropy.detach();
 				count_updates += 1;
+				//c10::cuda::CUDACachingAllocator::emptyCache();
+
 				// printf("Pre next\n");
 				// Sleep(5000);
-
-				// printf("Chillin\n");
-				// Sleep(10000);
-				/*states.erase(states.begin());
-				actions.erase(actions.begin());
-				values.erase(values.begin());
-				log_probs.erase(log_probs.begin());
-				rewards.erase(rewards.begin());
-				dones.erase(dones.begin());*/
-				// auto now = std::chrono::high_resolution_clock::now();
-				// std::cout << "Time to prepare: " << (float)(std::chrono::duration_cast<std::chrono::milliseconds>(now - decide_time).count()) << std::endl;
 			}
 		}
 	}
@@ -928,6 +1161,15 @@ auto PPO::update(ActorCritic &ac, ActorCritic &ac_work,
 	avg_training_loss = total_loss_tensor.item<double>() / count_updates;
 	avg_actor_loss = total_actor_loss_tensor.item<double>() / count_updates;
 	avg_critic_loss = total_critic_loss_tensor.item<double>() / count_updates;
+	avg_entropy = total_entropy_tensor.item<double>() / count_updates;
+
+	avg_actor_grad_norm = total_actor_grad_norm.item<double>() / count_updates;
+	avg_critic_grad_norm = total_critic_grad_norm.item<double>() / count_updates;
+	avg_actor_weight_norm = total_actor_weight_norm.item<double>() / count_updates;
+	avg_critic_weight_norm = total_critic_weight_norm.item<double>() / count_updates;
+	avg_actor_activation_mean = total_actor_activation_mean.item<double>() / count_updates;
+	avg_actor_activation_std = total_actor_activation_std.item<double>() / count_updates;
+
 	//auto now = std::chrono::high_resolution_clock::now();
 	//std::cout << "Time to calculate loss: " << (float)(std::chrono::duration_cast<std::chrono::milliseconds>(now - decide_time).count()) << std::endl;
 	//std::cout << "Average training Loss: " << avg_loss << std::endl;

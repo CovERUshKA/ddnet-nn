@@ -1106,30 +1106,7 @@ void CGameContext::ConStartFightNN(IConsole::IResult *pResult, void *pUserData)
 	if(!pPlayer)
 		return;
 
-	if(pSelf->m_VoteCloseTime && pSelf->m_VoteCreator == pResult->m_ClientID && (pSelf->IsKickVote() || pSelf->IsSpecVote()))
-	{
-		pSelf->Console()->Print(
-			IConsole::OUTPUT_LEVEL_STANDARD,
-			"chatresp",
-			"You are running a vote please try again after the vote is done!");
-		return;
-	}
-	else if(g_Config.m_SvTeam == SV_TEAM_FORBIDDEN || g_Config.m_SvTeam == SV_TEAM_FORCED_SOLO)
-	{
-		pSelf->Console()->Print(IConsole::OUTPUT_LEVEL_STANDARD, "chatresp",
-			"Teams are disabled");
-		return;
-	}
-	else if(g_Config.m_SvTeam == SV_TEAM_MANDATORY && pResult->GetInteger(0) == 0 && pPlayer->GetCharacter() && pPlayer->GetCharacter()->m_LastStartWarning < pSelf->Server()->Tick() - 3 * pSelf->Server()->TickSpeed())
-	{
-		pSelf->Console()->Print(
-			IConsole::OUTPUT_LEVEL_STANDARD,
-			"chatresp",
-			"You must join a team and play with somebody or else you can\'t play");
-		pPlayer->GetCharacter()->m_LastStartWarning = pSelf->Server()->Tick();
-	}
-
-	if(pResult->NumArguments() == 0)
+	if(pResult->NumArguments() <= 1)
 	{
 		if(pPlayer->GetCharacter() == 0)
 		{
@@ -1172,6 +1149,8 @@ void CGameContext::ConStartFightNN(IConsole::IResult *pResult, void *pUserData)
 				pPlayer->m_Last_Team = pSelf->Server()->Tick();
 
 				CServer* server = (CServer*)pSelf->Server();
+
+				pSelf->NeuralNetwork()->StartFight(pPlayer, pResult->GetInteger(0));
 
 				/*auto pMainBot = server->AddBot("NN");
 				auto main_character = pMainBot->GetCharacter();

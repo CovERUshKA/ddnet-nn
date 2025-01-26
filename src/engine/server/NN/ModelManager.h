@@ -6,6 +6,11 @@ using namespace std;
 
 struct ModelInputInputs
 {
+	// Indicates on which side bot is located
+	// -1 - means left side
+	// 1 - means right side
+	float side;
+
 	//
 	// Local bot
 	//
@@ -16,6 +21,14 @@ struct ModelInputInputs
 	float bot_is_out_of_area;
 	// Velocity of the bot by x and y axis
 	vec2 bot_vel;
+
+	// Hammer time (0 - can hammer, 1 - can't hammer)
+	float bot_hammer_time;
+	// Hook time (0 - hook ended, 1 - hook started)
+	float bot_hook_time;
+
+	// Time till bot unfreeze. 0 means unfreezed.
+	float bot_freeze_time;
 
 	// HOOK
 
@@ -42,6 +55,14 @@ struct ModelInputInputs
 	float enemy_is_out_of_area;
 	// Velocity of the enemy by x and y axis
 	vec2 enemy_vel;
+
+	// Hammer time (0 - can hammer, 1 - can't hammer)
+	float enemy_hammer_time;
+	// Hook time (0 - hook ended, 1 - hook started)
+	float enemy_hook_time;
+
+	// Time till enemy unfreeze. 0 means unfreezed.
+	float enemy_freeze_time;
 
 	// HOOK
 
@@ -80,11 +101,18 @@ struct ModelOutput
 	int direction;
 	// Should bot hook/hold
 	bool hook;
+	// Should bot hammer/hold
+	bool hammer;
 };
+
 struct ModelManager
 {
+	bool is_training;
+	std::string train_folder;
 	int count_bots, iReplaysPerBot, batch_size;
-	ModelManager(size_t batch_size, size_t count_players, uint64_t seed);
+	ModelManager(bool is_training, std::string train_folder, size_t batch_size, size_t count_players, uint64_t seed);
+
+	bool LoadModels(std::string folder_path, std::string main_model_name, bool load_previous);
 
 	//ModelOutput Decide(ModelInputInputs &input);
 	std::vector<ModelOutput> Decide(
@@ -97,11 +125,18 @@ struct ModelManager
 		bool validating = false);
 	//std::vector<ModelOutput> Decide(std::vector<ModelInput> &input);
 
-	void Reward(float reward, bool done);
+	void Reward(float reward, bool reset_accumulation, bool done);
 	void SaveReplays(bool &is_full);
 	void ErasePlayerReplays(int id);
 
-	void Update(double avg_reward, int dies, bool &updated, double &avg_training_loss, double &avg_actor_loss, double &avg_critic_loss);
+	void Update(double avg_reward, bool cache_model, bool &updated,
+		double &avg_training_loss, double &avg_actor_loss, double &avg_critic_loss,
+		double &avg_entropy,
+		double &avg_actor_grad_norm, double &avg_critic_grad_norm,
+		double &avg_actor_weight_norm, double &avg_critic_weight_norm,
+		double &avg_actor_activation_mean, double &avg_actor_activation_std,
+		double &critic_mean_absolute_error, double &critic_correlation_coefficient);
+	void ReassignOldModels();
 
 	void Save(std::string filename);
 
@@ -117,4 +152,6 @@ struct ModelManager
 	// Returns count of PPO epochs
 	int64_t GetCountPPOEpochs();
 	size_t GetCountEpisodes();
+	// Return entropy coefficient
+	double GetEntropyCoefficient();
 };

@@ -2521,61 +2521,6 @@ int CServer::LoadMap(const char *pMapName)
 	return 1;
 }
 
-unsigned long long GenerateSeed()
-{
-	return std::chrono::system_clock::now().time_since_epoch().count();
-}
-
-vec2 angle_to_coords(int angle)
-{
-	angle -= 402;
-	auto reversed = (float)angle / 256.0f;
-	// cout << (float)angle / 256.0f << endl;
-	int x = (int)(round(cos(reversed) * 299.0f));
-	int y = (int)(round(sin(reversed) * 299.0f));
-	//cout << x << endl;
-	//cout << y << endl;
-
-	return vec2(x, y);
-}
-
-int coords_to_angle(float x, float y)
-{
-	auto TmpAngle = atan2f(y, x);
-
-	int m_Angle = 0;
-	//cout << m_Angle << endl;
-
-	constexpr float pi = 3.1415926535897932384626433f;
-
-	if(TmpAngle < -(pi / 2.0f))
-	{
-		m_Angle = (int)((TmpAngle + (2.0f * pi)) * 256.0f);
-		//cout << m_Angle << endl;
-	}
-	else
-	{
-		m_Angle = (int)(TmpAngle * 256.0f);
-		//cout << m_Angle << endl;
-	}
-
-	return m_Angle + 402;
-}
-
-int calc_angles_distance(int angle_1, int angle_2)
-{
-	int max = 1205 + 402;
-	int max_half = 804;
-
-	int dist = abs(angle_1 - angle_2);
-
-	if(dist >= max_half)
-	{
-		dist = max - dist;
-	}
-
-	return dist;
-}
 
 int CServer::Run()
 {
@@ -2690,8 +2635,10 @@ int CServer::Run()
 	// start game
 	{
 		bool NonActive = false;
-		bool PacketWaiting = false;
-		bool SpeedUpTicks = true;
+
+		// For speed up
+		bool PacketWaiting = !NeuralNetwork()->IsTraining();
+		bool SpeedUpTicks = NeuralNetwork()->IsTraining();
 
 		// Neural network
 		/*static constexpr int NumInput = 2;
@@ -2858,47 +2805,6 @@ int CServer::Run()
 					if(m_aClients[c].m_State != CClient::STATE_INGAME)
 						continue;
 
-					//if(strcmp(m_aClients[c].m_aName, "nameless tee") == 0)
-					//{
-					//	auto gamecontext = ((CGameContext *)GameServer());
-
-					//	auto player_char = gamecontext->GetPlayerChar(c);
-
-					//	if(player_char != nullptr)
-					//	{
-					//		auto gamelayer = gamecontext->Layers()->GameLayer();
-
-					//		const CTile *pTiles = static_cast<CTile *>(Kernel()->RequestInterface<IMap>()->GetData(gamelayer->m_Data));
-
-					//		const int Index = (int)(player_char->m_Pos.y / 32 + 1) * gamelayer->m_Width + (int)(player_char->m_Pos.x / 32);
-					//		const int GameIndex = pTiles[Index].m_Index;
-					//		//printf("x:%f y:%f %i\n", player_char->m_Pos.x, player_char->m_Pos.y, GameIndex);
-					//		//printf("x:%f y:%f\n", player_char->Core()->m_HookPos.x, player_char->Core()->m_HookPos.y);
-					//		//player_char->IsGrounded();
-
-					//		//printf("Jumps: %i\n", player_char->GetCore().m_Jumps);
-					//		//printf("Grounded: %f\n", player_char->GetCore().m_Vel.x);
-					//	}
-
-					//	//for(int y = 0; y < gamelayer->m_Height; y++)
-					//	//{
-					//	//	for(int x = 0; x < gamelayer->m_Width; x++)
-					//	//	{
-					//	//		const int Index = y * gamelayer->m_Width + x;
-
-					//	//		// Game layer
-					//	//		{
-					//	//			char buf[256];
-					//	//			const int GameIndex = pTiles[Index].m_Index;
-
-					//	//			sprintf(buf, "%i", GameIndex);
-
-					//	//			printf("Hello\n");
-					//	//		}
-					//	//	}
-					//	//}
-					//}
-
 					bool ClientHadInput = false;
 					for(auto &Input : m_aClients[c].m_aInputs)
 					{
@@ -2935,7 +2841,7 @@ int CServer::Run()
 			// snap game
 			if(NewTicks)
 			{
-				if((Config()->m_SvHighBandwidth || (m_CurrentGameTick % 2) == 0) && m_aDemoRecorder[MAX_CLIENTS].IsRecording())
+				if((Config()->m_SvHighBandwidth || (m_CurrentGameTick % 2) == 0) && (m_aDemoRecorder[MAX_CLIENTS].IsRecording() || !NeuralNetwork()->IsTraining()))
 					DoSnapshot();
 
 				UpdateClientRconCommands();

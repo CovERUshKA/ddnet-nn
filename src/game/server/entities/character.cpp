@@ -29,6 +29,11 @@ CCharacter::CCharacter(CGameWorld *pWorld, CNetObj_PlayerInput LastInput) :
 	m_Armor = 0;
 	m_StrongWeakID = 0;
 
+	// Neural network
+	m_TeleportNum = 0;
+	m_HittedBall = false;
+	m_HookMissed = false;
+
 	m_Input = LastInput;
 	// never initialize both to zero
 	m_Input.m_TargetX = 0;
@@ -454,6 +459,12 @@ void CCharacter::FireWeapon()
 			if((pTarget == this || (pTarget->IsAlive() && !CanCollide(pTarget->GetPlayer()->GetCID()))))
 				continue;
 
+			// Record if character hitted a ball. Need for neural network
+			if(pTarget->GetPlayer()->GetCharacter()->Core()->m_DeepFrozen)
+			{
+				m_HittedBall = true;
+			}
+
 			// set his velocity to fast upward (for now)
 			if(length(pTarget->m_Pos - ProjStartPos) > 0.0f)
 				GameServer()->CreateHammerHit(pTarget->m_Pos - normalize(pTarget->m_Pos - ProjStartPos) * GetProximityRadius() * 0.5f, TeamMask());
@@ -495,6 +506,7 @@ void CCharacter::FireWeapon()
 				FireDelay = GameServer()->Tuning()->m_HammerHitFireDelay;
 			else
 				FireDelay = GameServer()->TuningList()[m_TuneZone].m_HammerHitFireDelay;
+
 			m_ReloadTimer = FireDelay * Server()->TickSpeed() / 1000;
 		}
 	}
@@ -827,31 +839,32 @@ void CCharacter::TickDeferred()
 			StartVelX.u, StartVelY.u);
 		GameServer()->Console()->Print(IConsole::OUTPUT_LEVEL_DEBUG, "game", aBuf);
 	}
+#ifndef NEURAL_NETWORK_TRAINING
+	{
+		int Events = m_Core.m_TriggeredEvents;
+		int CID = m_pPlayer->GetCID();
 
-	//{
-	//	int Events = m_Core.m_TriggeredEvents;
-	//	int CID = m_pPlayer->GetCID();
+		int64_t SoloMask = (1 << CID);
+		int64_t TeamMask = Teams()->TeamMask(Team(), -1, CID);
+		// Some sounds are triggered client-side for the acting player
+		// so we need to avoid duplicating them
+		int64_t TeamMaskExceptSelf = Teams()->TeamMask(Team(), CID, CID);
+		// Some are triggered client-side but only on Sixup
+		int64_t TeamMaskExceptSelfIfSixup = Server()->IsSixup(CID) ? TeamMaskExceptSelf : TeamMask;
 
-	//	int64_t SoloMask = (1 << CID);
-	//	int64_t TeamMask = Teams()->TeamMask(Team(), -1, CID);
-	//	// Some sounds are triggered client-side for the acting player
-	//	// so we need to avoid duplicating them
-	//	int64_t TeamMaskExceptSelf = Teams()->TeamMask(Team(), CID, CID);
-	//	// Some are triggered client-side but only on Sixup
-	//	int64_t TeamMaskExceptSelfIfSixup = Server()->IsSixup(CID) ? TeamMaskExceptSelf : TeamMask;
+		if(Events & COREEVENT_GROUND_JUMP)
+			GameServer()->CreateSound(m_Pos, SOUND_PLAYER_JUMP, TeamMaskExceptSelf);
 
-	//	if(Events & COREEVENT_GROUND_JUMP)
-	//		GameServer()->CreateSound(m_Pos, SOUND_PLAYER_JUMP, TeamMaskExceptSelf);
+		if(Events & COREEVENT_HOOK_ATTACH_PLAYER)
+			GameServer()->CreateSound(m_Pos, SOUND_HOOK_ATTACH_PLAYER, TeamMaskExceptSelfIfSixup);
 
-	//	if(Events & COREEVENT_HOOK_ATTACH_PLAYER)
-	//		GameServer()->CreateSound(m_Pos, SOUND_HOOK_ATTACH_PLAYER, TeamMaskExceptSelfIfSixup);
+		if(Events & COREEVENT_HOOK_ATTACH_GROUND)
+			GameServer()->CreateSound(m_Pos, SOUND_HOOK_ATTACH_GROUND, TeamMaskExceptSelf);
 
-	//	if(Events & COREEVENT_HOOK_ATTACH_GROUND)
-	//		GameServer()->CreateSound(m_Pos, SOUND_HOOK_ATTACH_GROUND, TeamMaskExceptSelf);
-
-	//	if(Events & COREEVENT_HOOK_HIT_NOHOOK)
-	//		GameServer()->CreateSound(m_Pos, SOUND_HOOK_NOATTACH, TeamMaskExceptSelf);
-	//}
+		if(Events & COREEVENT_HOOK_HIT_NOHOOK)
+			GameServer()->CreateSound(m_Pos, SOUND_HOOK_NOATTACH, TeamMaskExceptSelf);
+	}
+#endif
 
 	if(m_pPlayer->GetTeam() == TEAM_SPECTATORS)
 	{
@@ -2063,10 +2076,16 @@ void CCharacter::NeuralNetworkPreDDRacePostCoreTick()
 {
 	int CurrentIndex = Collision()->GetMapIndex(m_Pos);
 
-	if(m_Core.m_DeepFrozen)
+	// Save only if it is 1st or 2nd teleport
+	int evilz = Collision()->IsEvilTeleport(CurrentIndex);
+	if(evilz == 1 || evilz == 2)
 	{
-		int evilz = Collision()->IsEvilTeleport(CurrentIndex);
-		teleport_num = evilz;
+		m_TeleportNum = evilz;
+	}
+
+	if(Core()->m_HookState == HOOK_RETRACT_START)
+	{
+		m_HookMissed = true;
 	}
 }
 

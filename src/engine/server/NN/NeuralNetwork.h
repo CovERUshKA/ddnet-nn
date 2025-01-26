@@ -8,38 +8,35 @@
 #include <game/mapitems.h>
 #include "ModelManager.h"
 #include <fstream>
+#include <deque>
 
 class CNeuralNetwork : public IInterface
 {
 	MACRO_INTERFACE("neuralnetwork", 0)
-	
-	// Validation phase
-	//bool validated;
-	//bool validating;
-	//int validating_dones;
 
-	bool spawn_probabilities_updated;
-
+	bool is_training;
 	int skip_tick;
 	int available_ticks_to_store;
 	int count_ticks;
 	int update_tick;
 	int ticks_collected;
 	int last_update_tick;
+	int cache_model_gap;
 
-	std::random_device rd;
-	std::mt19937 gen;
-	std::discrete_distribution<> spawn_probabilities_distribution;
+	//std::random_device rd;
+	//std::mt19937 gen;
+	//std::discrete_distribution<> spawn_probabilities_distribution;
 
 	int count_bots;
 	int count_teams;
 	int count_player_bots;
 	std::vector<CPlayer *> vBots;
-	std::vector<vec2> vBotLastPos;
-	std::vector<float> vBotLastVel;
+	//std::vector<vec2> vBotLastPos;
+	std::vector<vec2> vBallLastPos;
+	//std::vector<float> vBotLastVel;
 	//std::vector<int> vBotsSpawnPos;
 	//std::vector<float> vBotsCumulativeRewardBetweenSkipTick;
-	std::vector<float> vBotsCumulativeRewards;
+	//std::vector<float> vBotsCumulativeRewards;
 	std::vector<ModelInputInputs> vInputInputs;
 	std::vector<ModelOutput> vOutputs;
 
@@ -85,5 +82,13 @@ public:
 	void PreOnClientPredictedEarlyInput();
 	void PreOnClientPredictedInput();
 
-	CPlayer *AddBot(const char *name, vec2 spawn_pos);
+	bool IsTraining();
+
+	void RespawnTeam(int team);
+	void StartFight(CPlayer* player, bool right_side);
+
+	bool IsSwitchEnabled(int Number, int Team);
+	void ChangeSwitchState(int Number, int Team, bool state);
+
+	CPlayer *AddBot(std::string name, vec2 spawn_pos);
 }; // namespace NeuralNetwork

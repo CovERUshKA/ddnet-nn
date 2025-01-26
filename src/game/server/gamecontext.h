@@ -15,6 +15,7 @@
 #include "game/generated/protocol.h"
 #include "gameworld.h"
 #include "teehistorian.h"
+#include <engine/server/NN/NeuralNetwork.h>
 
 #include <memory>
 #include <string>
@@ -67,6 +68,7 @@ class CGameContext : public IGameServer
 	IEngine *m_pEngine;
 	IStorage *m_pStorage;
 	IAntibot *m_pAntibot;
+	CNeuralNetwork *m_pNeuralNetwork;
 	CLayers m_Layers;
 	CCollision m_Collision;
 	protocol7::CNetObjHandler m_NetObjHandler7;
@@ -136,6 +138,7 @@ public:
 	IConsole *Console() { return m_pConsole; }
 	IEngine *Engine() { return m_pEngine; }
 	IStorage *Storage() { return m_pStorage; }
+	CNeuralNetwork *NeuralNetwork() { return m_pNeuralNetwork; }
 	CCollision *Collision() { return &m_Collision; }
 	CTuningParams *Tuning() { return &m_Tuning; }
 	CTuningParams *TuningList() { return &m_aTuningList[0]; }

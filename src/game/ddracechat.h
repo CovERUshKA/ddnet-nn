@@ -64,7 +64,7 @@ CHAT_COMMAND("tp", "?r[player name]", CFGFLAG_CHAT | CFGFLAG_SERVER, ConTele, th
 CHAT_COMMAND("teleport", "?r[player name]", CFGFLAG_CHAT | CFGFLAG_SERVER, ConTele, this, "Teleport yourself to player or to where you are spectating if no player name is given")
 
 // Neural Network commands
-CHAT_COMMAND("start", "", CFGFLAG_CHAT | CFGFLAG_SERVER, ConStartFightNN, this, "Start fight with the neural network bot")
+CHAT_COMMAND("start", "?i['0'|'1']", CFGFLAG_CHAT | CFGFLAG_SERVER, ConStartFightNN, this, "Start fight with the neural network bot")
 
 CHAT_COMMAND("kill", "", CFGFLAG_CHAT | CFGFLAG_SERVER, ConProtectedKill, this, "Kill yourself when kill-protected during a long game (use f1, kill for regular kill)")
 

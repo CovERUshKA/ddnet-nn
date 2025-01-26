@@ -247,8 +247,10 @@ void CPlayer::Tick()
 				m_pCharacter = 0;
 			}
 		}
-		/*else if(m_Spawning && !m_WeakHookSpawn)
-			TryRespawn();*/
+		#ifndef NEURAL_NETWORK_TRAINING
+		else if(m_Spawning && !m_WeakHookSpawn)
+			TryRespawn();
+		#endif
 	}
 	else
 	{
