@@ -433,7 +433,7 @@ void CNeuralNetwork::PreTick()
 			// const int Index = (int)(bot_pos.y / 32 + 1) * gamelayer->m_Width + (int)(bot_pos.x / 32);
 			// const int GameIndex = pTiles[Index].m_Index;
 
-			input_inputs->pos = {bot_pos.x - (int)bot_pos.x, bot_pos.y - (int)bot_pos.y};
+			input_inputs->pos = {(bot_pos.x / 32.f) - (int)(bot_pos.x / 32.f), (bot_pos.y / 32.f) - (int)(bot_pos.y / 32.f)};
 			input_inputs->m_vel = bot_character_core->m_Vel / 20.f;
 			input_inputs->is_grounded = bot_character->IsGrounded();
 
