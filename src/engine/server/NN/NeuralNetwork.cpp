@@ -494,6 +494,10 @@ void CNeuralNetwork::OnInit()
 				"Critic Mean Absolute Error",
 				"Critic Correlation Coefficient",
 				"Entropy",
+				"Angle entropy",
+				"Hook entropy",
+				"Hammer entropy",
+				"Direction entropy",
 				"Entropy coefficient",
 				"Actor grad norm",
 				"Critic grad norm",
@@ -938,14 +942,21 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 	static float ball_on_spawn_reward = -0.1f; // -1.f There are 3 spawns. Center(at the start), left side and right side
 	static float ball_on_side_reward = 0.1f; // 0.05f If the ball is on your side it penalizes you, otherwise rewards you
 	static float ball_on_side_distance_reward = 0.1f; // 0.2f It means that if the ball is on your side and far from the net it always penalize you on that reward, if ball is half closer to net it penalize on half, but if on enemy side it rewards
+
+	// Hard to implement ideal finding distance from ball to goal
 	static float ball_moving_towards_net_reward = 0.3f; // 0.2f 10 If the ball is on your side it rewards for moving towards net, otherwise penalize. For example if ball moves from the farthest point to net in summ it would be this reward, so it calculates delta of moving to the net in %
 	static float ball_moving_towards_goal_reward = 0.03f; // 0.2f 10 On the enemy side it rewards if ball is moving toward goal
+
 	static float being_in_freeze_reward = -0.2f; // -0.1f if the bot is currently freezed it penalizes you on that reward
 	static float bot_is_grabbed_reward = 0.1f; // If the bot is currently grabbed to wall/ball applies to every tick
 	static float bot_is_holding_ball_reward = 0.05f; // If the bot is currently holding ball using hook it rewards every tick
 	static float bot_moving_towards_ball_reward = 0.1f; // Not implemented
 	static float bot_hitted_ball_reward = 2.0f; // Rewards bot for hitting ball
-	static float bot_hook_missed_reward = -0.5f; // Applies when bot teleported with ground teleporter
+
+	// Misses
+	static float bot_hammer_missed_reward = -0.2f; // Applies when bots hammer not hitted anything
+	static float bot_hook_missed_reward = -0.5f; // Applies when bots hook not hitted anything and it is retracting back to the bot
+
 	static float bot_teleported_reward = -1.f; // Applies when bot teleported with ground teleporter
 	static float step_reward = -0.02f; // -0.001f Applies every tick
 	static float divide_reward_by = 5.f;
@@ -1036,18 +1047,31 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 			}
 
 			// Handle ball hit
-			if (first_bot_character->m_HittedBall)
+			if(first_bot_character->m_HittedBall)
 			{
 				first_bot_character->m_HittedBall = false;
 				first_bot_reward += bot_hitted_ball_reward;
 				cumulative_ball_hits += 1;
 			}
 
+			if(first_bot_character->m_HammerMissed)
+			{
+				first_bot_character->m_HammerMissed = false;
+				first_bot_reward += bot_hammer_missed_reward;
+			}
+
+			// Handle ball hit
 			if(second_bot_character->m_HittedBall)
 			{
 				second_bot_character->m_HittedBall = false;
 				second_bot_reward += bot_hitted_ball_reward;
 				cumulative_ball_hits += 1;
+			}
+
+			if(second_bot_character->m_HammerMissed)
+			{
+				second_bot_character->m_HammerMissed = false;
+				second_bot_reward += bot_hammer_missed_reward;
 			}
 
 			if (first_bot_character->GetCore().m_HookedPlayer && first_bot_character->GetCore().m_HookedPlayer % 3 == 2)
@@ -1188,7 +1212,8 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 			double avg_actor_grad_norm = 0, avg_critic_grad_norm = 0,
 			avg_actor_weight_norm = 0, avg_critic_weight_norm = 0,
 			avg_actor_activation_mean = 0, avg_actor_activation_std = 0,
-			       critic_mean_absolute_error = 0, critic_correlation_coefficient = 0;
+			       critic_mean_absolute_error = 0, critic_correlation_coefficient = 0,
+			       avg_angle_entropy = 0, avg_hook_entropy = 0, avg_hammer_entropy = 0, avg_direction_entropy = 0;
 			bool updated = false;
 			size_t count_episodes = model_manager->GetCountEpisodes();
 
@@ -1204,7 +1229,8 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 				avg_entropy,
 				avg_actor_grad_norm, avg_critic_grad_norm,
 				avg_actor_weight_norm, avg_critic_weight_norm,
-				avg_actor_activation_mean, avg_actor_activation_std, critic_mean_absolute_error, critic_correlation_coefficient);
+				avg_actor_activation_mean, avg_actor_activation_std, critic_mean_absolute_error, critic_correlation_coefficient,
+				avg_angle_entropy, avg_hook_entropy, avg_hammer_entropy, avg_direction_entropy);
 			count_episodes_processed += count_episodes;
 			count_every_update += 1;
 			auto update_tick_delta = m_pServer->Tick() - last_update_tick;
@@ -1261,6 +1287,10 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 				       << "," << critic_mean_absolute_error
 				       << "," << critic_correlation_coefficient
 				       << "," << avg_entropy
+				       << "," << avg_angle_entropy
+				       << "," << avg_hook_entropy
+				       << "," << avg_hammer_entropy
+				       << "," << avg_direction_entropy
 				       << "," << model_manager->GetEntropyCoefficient()
 				       << "," << avg_actor_grad_norm
 				       << "," << avg_critic_grad_norm

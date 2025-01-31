@@ -30,34 +30,38 @@ struct ActorCriticImpl : public torch::nn::Module
 
 	}
 
-    bool Initialize(int64_t n_in, int64_t n_out, double std)
+    bool Initialize(int64_t n_in, int64_t n_out, int64_t h_start, double std)
     {
 	    this->n_in = n_in;
 	    this->n_out = n_out;
 	    actor_network = torch::nn::Sequential(
-		    torch::nn::Linear(n_in, 1024),
+		    torch::nn::Linear(n_in, h_start),
 		    torch::nn::ReLU(),
-		    torch::nn::Linear(1024, 512),
+		    torch::nn::Linear(h_start, h_start/2),
 			torch::nn::ReLU(),
-		    torch::nn::Linear(512, 256),
+		    torch::nn::Linear(h_start / 2, h_start/4),
 		    torch::nn::ReLU(),
-		    torch::nn::Linear(256, 128),
+		    torch::nn::Linear(h_start / 4, h_start/8),
 		    torch::nn::ReLU(),
-		    torch::nn::Linear(128, n_out)
+		    torch::nn::Linear(h_start / 8, h_start / 16),
+		    torch::nn::ReLU(),
+		    torch::nn::Linear(h_start/16, n_out)
 		    //torch::nn::Tanh()
 		    );
 		//mu_ = torch::full(n_out, 0.);
 	    log_std_ = torch::full(2, std::log(std));
 		critic_network = torch::nn::Sequential(
-		    torch::nn::Linear(n_in, 1024),
+		    torch::nn::Linear(n_in, h_start),
 		    torch::nn::ReLU(),
-		    torch::nn::Linear(1024, 512),
+		    torch::nn::Linear(h_start, h_start / 2),
 		    torch::nn::ReLU(),
-		    torch::nn::Linear(512, 256),
+		    torch::nn::Linear(h_start / 2, h_start / 4),
 		    torch::nn::ReLU(),
-		    torch::nn::Linear(256, 128),
+		    torch::nn::Linear(h_start / 4, h_start / 8),
 		    torch::nn::ReLU(),
-		    torch::nn::Linear(128, 1)
+		    torch::nn::Linear(h_start / 8, h_start / 16),
+		    torch::nn::ReLU(),
+		    torch::nn::Linear(h_start / 16, 1)
 		);
 
 	    //printf("Created from 0\n");
@@ -235,12 +239,12 @@ struct ActorCriticImpl : public torch::nn::Module
 	    used_presamples = 0;
     }
 
-	 // Gaussian entropy
+	// Gaussian entropy
     auto entropy_gaussian() -> torch::Tensor
     {
 	    // Differential entropy of normal distribution. For reference https://pytorch.org/docs/stable/_modules/torch/distributions/normal.html#Normal
 	    auto gaussian_entropy = 0.5 + 0.5 * log(2 * M_PI) + log_std_;
-
+	    
 	    // Sum over the last dimension (angle components)
 	    return gaussian_entropy.sum(); // Shape [...]
     }
@@ -264,7 +268,7 @@ struct ActorCriticImpl : public torch::nn::Module
 
     auto entropy(torch::Tensor action) -> torch::Tensor
     {
-	    auto angles_entropy = entropy_gaussian().expand({action.size(0)});
+	    auto angle_entropy = entropy_gaussian().expand({action.size(0)});
         
 		auto probs = torch::sigmoid(action.slice(1, 5, 6)); // Shape [batch_size, 1]
 		auto hook_entropy = entropy_bernoulli(probs);
@@ -272,12 +276,12 @@ struct ActorCriticImpl : public torch::nn::Module
 		auto hammer_entropy = entropy_bernoulli(probs);
 
 		probs = torch::softmax(action.slice(1, 2, 5), 1); // Shape [batch_size, 3]
-		auto dir_entropy = entropy_categorical(probs);
+		auto direction_entropy = entropy_categorical(probs);
 
 		hook_entropy = hook_entropy.squeeze(-1); // Convert from [batch_size, 1] to [batch_size]
 		hammer_entropy = hammer_entropy.squeeze(-1);
 
-        return angles_entropy + hook_entropy + hammer_entropy + dir_entropy;
+        return angle_entropy + hook_entropy + hammer_entropy + direction_entropy;
     }
 
 	// Extract log probabilities for categorical distribution

@@ -223,6 +223,7 @@ public:
 	// Neural Network
 	int m_TeleportNum;
 	bool m_HittedBall;
+	bool m_HammerMissed;
 	bool m_HookMissed;
 
 	// Setters/Getters because i don't want to modify vanilla vars access modifiers

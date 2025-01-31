@@ -32,6 +32,7 @@ CCharacter::CCharacter(CGameWorld *pWorld, CNetObj_PlayerInput LastInput) :
 	// Neural network
 	m_TeleportNum = 0;
 	m_HittedBall = false;
+	m_HammerMissed = false;
 	m_HookMissed = false;
 
 	m_Input = LastInput;
@@ -508,6 +509,10 @@ void CCharacter::FireWeapon()
 				FireDelay = GameServer()->TuningList()[m_TuneZone].m_HammerHitFireDelay;
 
 			m_ReloadTimer = FireDelay * Server()->TickSpeed() / 1000;
+		}
+		else
+		{
+			m_HammerMissed = true;
 		}
 	}
 	break;

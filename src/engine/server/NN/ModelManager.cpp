@@ -22,22 +22,23 @@ namespace fs = std::filesystem;
 
 int64_t n_in = 40;
 int64_t n_out = 7;
+int64_t h_start = 1024;
 double std_dev = 1;
 double learning_rate = 5e-5; // Default: 5e-5
 double actor_learning_rate = 2e-4; // Default: 5e-5
-double critic_learning_rate = 1e-3; // Default: 1e-4
+double critic_learning_rate = 5e-4; // Default: 1e-4
 //double weight_decay = 0.0001;
 
 int64_t mini_batch_size = 8000; // 4096, 8192, 16384, 32768
 int64_t count_mini_batches = 1;
 int64_t max_mini_batch_size = 8000; // 4096, 8192, 16384, 32768
 int64_t ppo_epochs = 4;
-double ent_coef = 2e-3; // Entropy coefficient
+double ent_coef = 1e-2; // Entropy coefficient
 double min_ent_coef = 1e-4;
 double ent_decay_factor = 0.95;
 double clip_param = 0.2; // Default: 0.2
 float gamma = 0.99f; // Default: 0.99f Discount factor
-float lambda = 0.97f; // GAE lambda
+float lambda = 0.95f; // GAE lambda
 
 float old_models_train = 0.2f; // Percent of old models
 int count_cached_old_models = 100; // old_models_train * ((float)count_bots / 2.f)
@@ -115,8 +116,8 @@ ModelManager::ModelManager(bool is_training, std::string train_folder, size_t ba
 
 	torch::manual_seed(seed);
 
-	ac_update->Initialize(n_in, n_out, std_dev);
-	ac_work->Initialize(n_in, n_out, std_dev);
+	ac_update->Initialize(n_in, n_out, h_start, std_dev);
+	ac_work->Initialize(n_in, n_out, h_start, std_dev);
 
 	//graph_main_input_tensor = torch::empty({(int)(count_bots - old_bots_indexes.size()), n_in}, torch::kCUDA);
 	//graph_main_output_tensor = torch::empty({(int)(count_bots - old_bots_indexes.size()), n_out}, torch::kCUDA);
@@ -146,7 +147,7 @@ ModelManager::ModelManager(bool is_training, std::string train_folder, size_t ba
 	param_groups.push_back(torch::optim::OptimizerParamGroup({ac_update->critic_network->parameters()},
 							std::make_unique<torch::optim::AdamOptions>(critic_learning_rate)));
 	param_groups.push_back(torch::optim::OptimizerParamGroup({ac_update->log_std_},
-		std::make_unique<torch::optim::AdamOptions>(actor_learning_rate)));
+		std::make_unique<torch::optim::AdamOptions>(actor_learning_rate / 2.)));
 
 	opt = std::make_shared<torch::optim::Adam>(param_groups);
 
@@ -281,7 +282,7 @@ bool ModelManager::LoadModels(std::string folder_path, std::string main_model_na
 				std::string new_model_path = new_models_folder + "\\" + model_filename;
 
 				ActorCritic old_model;
-				old_model->Initialize(n_in, n_out, std_dev);
+				old_model->Initialize(n_in, n_out, h_start, std_dev);
 				torch::load(old_model, model_path);
 				old_model->eval();
 				old_model->to(device);
@@ -627,7 +628,7 @@ std::vector<ModelOutput> ModelManager::Decide(
 	hooks = hooks.reshape({(int)input_inputs.size()}).to(torch::kBool).to(torch::kCPU, true);
 	hammers = hammers.reshape({(int)input_inputs.size()}).to(torch::kBool).to(torch::kCPU, true);
 
-	// When CPC -> GPU no synchronize needed, but needed when GPU -> CPU https://pytorch.org/tutorials/intermediate/pinmem_nonblock.html
+	// When CPU -> GPU no synchronization needed, but needed when GPU -> CPU https://pytorch.org/tutorials/intermediate/pinmem_nonblock.html
 	cudaStreamSynchronize(c10::cuda::getCurrentCUDAStream());
 	
 	auto angle_x_vec = angle_x.accessor<float, 1>(); // at::Half float
@@ -783,7 +784,8 @@ void ModelManager::Update(double avg_reward, bool cache_model, bool &updated,
 	double &avg_actor_grad_norm, double &avg_critic_grad_norm,
 	double &avg_actor_weight_norm, double &avg_critic_weight_norm,
 	double &avg_actor_activation_mean, double &avg_actor_activation_std,
-	double &critic_mean_absolute_error, double &critic_correlation_coefficient)
+	double &critic_mean_absolute_error, double &critic_correlation_coefficient,
+	double &avg_angle_entropy, double &avg_hook_entropy, double &avg_hammer_entropy, double &avg_direction_entropy)
 {
 	// Update.
 	if(!ac_work->is_training())
@@ -803,7 +805,7 @@ void ModelManager::Update(double avg_reward, bool cache_model, bool &updated,
 	if(cache_model)
 	{
 		ActorCritic old_model;
-		old_model->Initialize(n_in, n_out, std_dev);
+		old_model->Initialize(n_in, n_out, h_start, std_dev);
 		old_model->copy_from(ac_work.get());
 		old_model->eval();
 		old_ac.push_back(old_model);
@@ -825,6 +827,7 @@ void ModelManager::Update(double avg_reward, bool cache_model, bool &updated,
 			avg_actor_weight_norm, avg_critic_weight_norm,
 			avg_actor_activation_mean, avg_actor_activation_std,
 			critic_mean_absolute_error, critic_correlation_coefficient,
+			avg_angle_entropy, avg_hook_entropy, avg_hammer_entropy, avg_direction_entropy,
 			clip_param);
 	}
 	catch(const std::exception &e)
