@@ -45,7 +45,7 @@ struct ActorCriticImpl : public torch::nn::Module
 		    torch::nn::ReLU(),
 		    torch::nn::Linear(h_start / 8, h_start / 16),
 		    torch::nn::ReLU(),
-		    torch::nn::Linear(h_start/16, n_out)
+		    torch::nn::Linear(h_start / 16, n_out)
 		    //torch::nn::Tanh()
 		    );
 		//mu_ = torch::full(n_out, 0.);
@@ -315,14 +315,15 @@ struct ActorCriticImpl : public torch::nn::Module
     auto log_prob(torch::Tensor logits, torch::Tensor sampled) -> torch::Tensor
     {
 	    auto log_probs = torch::zeros({(int)sampled.size(0), 5}, sampled.device());
-	    auto mu_ = logits.slice(1, 0, 2);
+
+		// Apply tanh to first 2 outputs
+	    auto mu_ = torch::tanh(logits.slice(1, 0, 2));
 	    auto _action = sampled.slice(1, 0, 2);
 
         // Logarithmic probability of taken action, given the current distribution.
-	    auto log_clamped = log_std_.clamp(-10.0, 2.0); // Prevent extreme values in exp
-	    torch::Tensor var = (log_clamped + log_clamped).exp();
+	    torch::Tensor var = (log_std_ + log_std_).exp();
 
-	    log_probs.slice(1, 0, 2) += -((_action - mu_) * (_action - mu_)) / (2 * var) - log_clamped - log(sqrt(2 * M_PI));
+	    log_probs.slice(1, 0, 2) += -((_action - mu_) * (_action - mu_)) / (2 * var) - log_std_ - log(sqrt(2 * M_PI));
 
 		log_probs.slice(1, 2, 3) += log_prob_categorical_batch(logits.slice(1, 2, 5), sampled.slice(1, 2, 3));
 
@@ -330,7 +331,7 @@ struct ActorCriticImpl : public torch::nn::Module
 
 		log_probs.slice(1, 4, 5) += log_prob_bernoulli_batch(logits.slice(1, 6, 7), sampled.slice(1, 4, 5));
 
-		//std::cout << log_probs << std::endl;
+		//std::cout << log_probs.slice(1, 0, 2) << std::endl;
 
         return log_probs;
     }

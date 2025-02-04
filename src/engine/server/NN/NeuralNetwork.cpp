@@ -478,9 +478,12 @@ void CNeuralNetwork::OnInit()
 			std::vector<std::string> header_columns = {
 				"Step",
 				"Count episodes",
+				"Count episodes with old",
 				"Cumulative ball hits",
 				"First bot cumulative score",
 				"Second bot cumulative score",
+				"Current bot cumulative score",
+				"Old bot cumulative score",
 				"Average freeze time",
 				"Average ball absolute velocity",
 				"Average ball velocity(x)",
@@ -924,11 +927,19 @@ void CNeuralNetwork::PreOnClientPredictedInput()
 void CNeuralNetwork::PostTick(float time_to_tick)
 {
 	//printf("PostTick\n");
+	static float count_episodes_with_old = 0;
 	static float freeze_cumulative_time = 0;
 	static float first_bot_cumulative_reward = 0;
 	static float second_bot_cumulative_reward = 0;
+
+	// Score goaled
 	static float first_bot_cumulative_score = 0;
 	static float second_bot_cumulative_score = 0;
+
+	// Old vs Current
+	static float current_bot_cumulative_score = 0;
+	static float old_bot_cumulative_score = 0;
+
 	static float cumulative_ball_speed_x = 0;
 	static float cumulative_ball_abs_speed = 0;
 	static float cumulative_ball_hits = 0;
@@ -964,7 +975,7 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 	static int long_no_improvements_ticks = 200;
 
 	//static std::vector<float> rewards;
-	static float best_average = 999999999999.f;
+	static float best_average = 0.f;
 	static float last_saved = 9999999999999.f;
 
 	auto now = std::chrono::high_resolution_clock::now();
@@ -981,6 +992,10 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 			int first_bot_id = team_id * 3;
 			int second_bot_id = team_id * 3 + 1;
 			int ball_id = team_id * 3 + 2;
+
+			bool first_is_old = model_manager->IsOldModel(team_id * 2);
+			bool second_is_old = model_manager->IsOldModel(team_id * 2 + 1);
+			bool team_with_old = first_is_old || second_is_old;
 
 			auto first_bot_character = vBots[first_bot_id]->GetCharacter();
 			auto second_bot_character = vBots[second_bot_id]->GetCharacter();
@@ -1008,12 +1023,26 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 					first_bot_reward += goal_penalize_reward;
 					second_bot_reward += goal_reward;
 					second_bot_cumulative_score += 1;
+					if(team_with_old)
+					{
+						if(second_is_old)
+							old_bot_cumulative_score += 1;
+						else
+							current_bot_cumulative_score += 1;
+					}
 				}
 				else
 				{
 					first_bot_reward += goal_reward;
 					second_bot_reward += goal_penalize_reward;
 					first_bot_cumulative_score += 1;
+					if(team_with_old)
+					{
+						if(first_is_old)
+							old_bot_cumulative_score += 1;
+						else
+							current_bot_cumulative_score += 1;
+					}
 				}
 				goaled = true;
 			}
@@ -1086,6 +1115,11 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 			if(IsSwitchEnabled(4, team_id+1))
 			{
 				match_is_done = true;
+
+				if(team_with_old)
+				{
+					count_episodes_with_old += 1;
+				}
 
 				// Respawn everyone in team
 				RespawnTeam(team_id + 1);
@@ -1224,7 +1258,7 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 			static size_t count_episodes_processed = 0;
 			static size_t count_every_update = 0;
 			bool cache_model = count_updated % cache_model_gap == 0 && model_manager->IsTraining();
-			model_manager->Update(avg_freeze_time, cache_model, updated,
+			model_manager->Update(avg_ball_hits, cache_model, updated,
 				avg_training_loss, avg_actor_loss, avg_critic_loss,
 				avg_entropy,
 				avg_actor_grad_norm, avg_critic_grad_norm,
@@ -1254,9 +1288,9 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 					last_saved = avg_freeze_time;
 				}
 
-				if(avg_freeze_time < best_average && model_manager->IsTraining())
+				if(avg_ball_hits > best_average && model_manager->IsTraining())
 				{
-					best_average = avg_freeze_time;
+					best_average = avg_ball_hits;
 					if(!m_pStorage->CpyFile(("train\\" + dir_name + "\\models\\last_model.pt").c_str(), ("train\\" + dir_name + "\\models\\best_model.pt").c_str(), false))
 					{
 						dbg_msg("neuralnetwork", "Failed to copy best model");
@@ -1269,11 +1303,14 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 
 				model_manager->Save("train\\" + dir_name + "\\models\\last");
 
-				logger << ticks_collected / count_ticks
+				logger << count_updated
 				       << "," << count_episodes
+				       << "," << count_episodes_with_old
 				       << "," << cumulative_ball_hits
 				       << "," << first_bot_cumulative_score
 				       << "," << second_bot_cumulative_score
+				       << "," << current_bot_cumulative_score
+				       << "," << old_bot_cumulative_score
 				       << "," << avg_freeze_time
 				       << "," << avg_ball_abs_vel
 				       << "," << avg_ball_vel_x
@@ -1355,6 +1392,9 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 				= cumulative_time_to_cpu \
 				= cumulative_time_process_last \
 				= count_episodes_processed \
+				= current_bot_cumulative_score \
+				= old_bot_cumulative_score \
+				= count_episodes_with_old \
 				= count_every_update = 0;
 			}
 			respawn_all = true;

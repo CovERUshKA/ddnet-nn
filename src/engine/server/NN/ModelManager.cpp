@@ -22,19 +22,20 @@ namespace fs = std::filesystem;
 
 int64_t n_in = 40;
 int64_t n_out = 7;
-int64_t h_start = 1024;
-double std_dev = 1;
-double learning_rate = 5e-5; // Default: 5e-5
-double actor_learning_rate = 2e-4; // Default: 5e-5
-double critic_learning_rate = 5e-4; // Default: 1e-4
+int64_t h_start = 1024; // 1024
+double std_dev = 0.37; // log(0.37) = -1
+double learning_rate = 5e-5;
+double actor_learning_rate = 3e-4;
+double log_std_learning_rate = 1e-4;
+double critic_learning_rate = 1e-3;
 //double weight_decay = 0.0001;
 
 int64_t mini_batch_size = 8000; // 4096, 8192, 16384, 32768
 int64_t count_mini_batches = 1;
 int64_t max_mini_batch_size = 8000; // 4096, 8192, 16384, 32768
 int64_t ppo_epochs = 4;
-double ent_coef = 1e-2; // Entropy coefficient
-double min_ent_coef = 1e-4;
+double ent_coef = 2e-3; // Entropy coefficient
+double min_ent_coef = 2e-3;
 double ent_decay_factor = 0.95;
 double clip_param = 0.2; // Default: 0.2
 float gamma = 0.99f; // Default: 0.99f Discount factor
@@ -147,39 +148,39 @@ ModelManager::ModelManager(bool is_training, std::string train_folder, size_t ba
 	param_groups.push_back(torch::optim::OptimizerParamGroup({ac_update->critic_network->parameters()},
 							std::make_unique<torch::optim::AdamOptions>(critic_learning_rate)));
 	param_groups.push_back(torch::optim::OptimizerParamGroup({ac_update->log_std_},
-		std::make_unique<torch::optim::AdamOptions>(actor_learning_rate / 2.)));
+		std::make_unique<torch::optim::AdamOptions>(log_std_learning_rate)));
 
 	opt = std::make_shared<torch::optim::Adam>(param_groups);
 
-	std::string load_folder_path = "train\\1737883187599";
-	std::string load_main_model_name = "last";
+	std::string load_folder_path = "train\\1738668446598";
+	std::string load_main_model_name = "best";
 	bool load_previous = true;
-	//LoadModels(load_folder_path, load_main_model_name, load_previous);
+	LoadModels(load_folder_path, load_main_model_name, load_previous);
 	scheduler = std::make_shared<torch::optim::ReduceLROnPlateauScheduler>(*opt, /* mode */ torch::optim::ReduceLROnPlateauScheduler::max, /* factor */ 0.5, /* patience */ 10);
-	//for(auto &param_group : opt->param_groups())
-	//{
-	//	std::cout << param_group.options().get_lr() << std::endl;
-	//	if(param_group.options().get_lr() == actor_learning_rate)
-	//	{
-	//		printf("Setting\n");
-	//		param_group.options().set_lr(1e-5);
-	//		printf("Setted\n");
-	//	}
+	/*for(auto &param_group : opt->param_groups())
+	{
+		std::cout << param_group.options().get_lr() << std::endl;
+		if(param_group.options().get_lr() == actor_learning_rate)
+		{
+			printf("Setting\n");
+			param_group.options().set_lr(actor_learning_rate / 2.);
+			printf("Setted\n");
+		}
 
-	//	if(param_group.options().get_lr() == critic_learning_rate)
-	//	{
-	//		printf("Setting\n");
-	//		param_group.options().set_lr(5e-5);
-	//		printf("Setted\n");
-	//	}
+		if(param_group.options().get_lr() == critic_learning_rate)
+		{
+			printf("Setting\n");
+			param_group.options().set_lr(critic_learning_rate / 2.);
+			printf("Setted\n");
+		}
 
-	//	/*if(param_group.options().get_lr() == 2e-4)
-	//	{
-	//		printf("Setting\n");
-	//		param_group.options().set_lr(3e-5);
-	//		printf("Setted\n");
-	//	}*/
-	//}
+		if(param_group.options().get_lr() == log_std_learning_rate)
+		{
+			printf("Setting\n");
+			param_group.options().set_lr(log_std_learning_rate / 2.);
+			printf("Setted\n");
+		}
+	}*/
 	//Sleep(7000);
 	ac_update->to(device);
 	ac_work->to(device);
@@ -324,19 +325,20 @@ torch::Tensor sample_bernoulli_batch(torch::Tensor probs)
 torch::Tensor process_old_model_batch(torch::Tensor outputs)
 {
 	// Split tensor components
-	auto angles = outputs.slice(1, 0, 2);
+	auto angle_logits = outputs.slice(1, 0, 2);
 	auto dir_logits = outputs.slice(1, 2, 5);
 	auto hook_logits = outputs.slice(1, 5, 6);
 	auto hammer_logits = outputs.slice(1, 6, 7);
 	//printf("111\n");
 	// Process deterministically
-	auto directions = torch::argmax(torch::softmax(dir_logits, 1), 1).unsqueeze(1);
+	auto angles = torch::tanh(angle_logits);
+	auto directions = torch::argmax(dir_logits, 1).unsqueeze(1);
 	//printf("222\n");
 
-	auto hooks = torch::sigmoid(hook_logits) > 0.5;
+	auto hooks = hook_logits > 0;
 	//printf("333\n");
 
-	auto hammers = torch::sigmoid(hammer_logits) > 0.5;
+	auto hammers = hammer_logits > 0;
 	//printf("444\n");
 
 	//std::cout << directions.sizes() << std::endl;
@@ -354,26 +356,26 @@ torch::Tensor process_old_model_batch(torch::Tensor outputs)
 torch::Tensor
 process_main_network(torch::Tensor av_current, bool validating = false)
 {
-	torch::Tensor angles = av_current.slice(1, 0, 2);
+	torch::Tensor angle_logits = av_current.slice(1, 0, 2);
 	torch::Tensor dir_logits = av_current.slice(1, 2, 5);
 	torch::Tensor hook_logits = av_current.slice(1, 5, 6);
 	torch::Tensor hammer_logits = av_current.slice(1, 6, 7);
 
-	if(!validating && ac_work->is_training())
-	{
-		angles = ac_work->normal_angles(angles);
-	}
+	auto angles = torch::tanh(angle_logits);
+	//printf("keke\n");
 
 	// Directions
 	auto dir_probs = torch::softmax(dir_logits, 1);
-	auto directions = (ac_work->is_training() && !validating) ? sample_categorical_batch(dir_probs) : torch::argmax(dir_probs, 1);
+	auto directions = (ac_work->is_training() && !validating) ? sample_categorical_batch(dir_probs) : torch::argmax(dir_probs, 1).unsqueeze(1);
 
 	// Hooks/Hammers
 	auto hooks = torch::sigmoid(hook_logits);
 	auto hammers = torch::sigmoid(hammer_logits);
+	//printf("3131\n");
 
 	if(ac_work->is_training() && !validating)
 	{
+		angles = ac_work->normal_angles(angles);
 		hooks = sample_bernoulli_batch(hooks);
 		hammers = sample_bernoulli_batch(hammers);
 	}
@@ -382,6 +384,13 @@ process_main_network(torch::Tensor av_current, bool validating = false)
 		hooks = hooks > 0.5;
 		hammers = hammers > 0.5;
 	}
+
+	//printf("111\n");
+	/*std::cout << angles.sizes() << std::endl;
+	std::cout << directions.sizes() << std::endl;
+	std::cout << hooks.sizes() << std::endl;
+	std::cout << hammers.sizes() << std::endl;*/
+
 
 	auto catted = torch::cat({angles, directions.to(torch::kFloat32), hooks.to(torch::kFloat32), hammers.to(torch::kFloat32)}, 1);
 
@@ -530,7 +539,7 @@ std::vector<ModelOutput> ModelManager::Decide(
 		// std::cout << old_current.sizes() << std::endl;
 		old_current_sampled = process_old_model_batch(old_current);
 	}
-	//printf("1\n");
+	//printf("1.5\n");
 
 	av_current_sampled = process_main_network(av_current);
 	//nvtxRangePop();
@@ -565,6 +574,7 @@ std::vector<ModelOutput> ModelManager::Decide(
 	//printf("4.5\n");
 
 	auto tActions_sampled = torch::cat(all_actions_sampled, 0).reshape({(int)input_inputs.size(), 5});
+
 	//auto tActions_cpu = tActions.to(torch::kCPU);
 	//nvtxRangePop();
 	/*static double maxee_max = 0;
@@ -581,7 +591,6 @@ std::vector<ModelOutput> ModelManager::Decide(
 	}*/
 
 	//printf("5\n");
-	// printf("10\n");
 	
 	now = std::chrono::high_resolution_clock::now();
 	time_to_cpu = std::chrono::duration<double>(now - measure_time).count() * 1000.;
@@ -589,7 +598,7 @@ std::vector<ModelOutput> ModelManager::Decide(
 
 	//printf("12\n");
 
-	if(ac_work->is_training() && !validating)
+	if(is_training && !validating)
 	{
 		//torch::Tensor sampled = torch::zeros({(int)input_inputs.size(), 5}, torch::kCUDA);
 		////printf("13\n");
@@ -612,7 +621,7 @@ std::vector<ModelOutput> ModelManager::Decide(
 	//printf("6\n");
 
 	// Process angles
-	auto angles = av_current_sampled.index({torch::indexing::Slice(), torch::indexing::Slice(0, 2)});
+	auto angles = tActions_sampled.index({torch::indexing::Slice(), torch::indexing::Slice(0, 2)});
 	auto ataned = torch::atan2(angles.index({torch::indexing::Slice(), 1}), angles.index({torch::indexing::Slice(), 0}));
 	auto angle_x = torch::cos(ataned);
 	auto angle_y = torch::sin(ataned);
@@ -718,6 +727,13 @@ void ModelManager::SaveReplays(bool& is_full)
 					mask.push_back(1);
 				}
 			}
+			for(size_t i = 0; i < dones.size() && old_ac.size(); i++)
+			{
+				if(dones[i] && input_to_model_id[i] != -1)
+				{
+					input_to_model_id[i] = static_cast<int>(round(random_float() * (float)(old_ac.size() - 1))); // Assign to old model
+				}
+			}
 			//printf("2\n");
 			//std::cout << states[0].sizes() << std::endl;
 			//std::cout << actions[0].sizes() << std::endl;
@@ -747,6 +763,17 @@ void ModelManager::SaveReplays(bool& is_full)
 	return;
 }
 
+bool ModelManager::IsOldModel(int bot_id)
+{
+	if(old_ac.empty())
+	{
+		return false;
+	}
+
+
+	return input_to_model_id[bot_id] != -1;
+}
+
 void ModelManager::ReassignOldModels()
 {
 	old_bots_indexes.clear();
@@ -763,8 +790,9 @@ void ModelManager::ReassignOldModels()
 	input_to_model_id.assign(count_bots, -1); // -1 means current model
 	for(size_t i = 0; i < old_bots_indexes.size(); ++i)
 	{
-		input_to_model_id[old_bots_indexes[i]] = (int)(random_float() * (float)(old_ac.size() - 1)); // Assign to old model
+		input_to_model_id[old_bots_indexes[i]] = static_cast<int>(round(random_float() * (float)(old_ac.size() - 1))); // Assign to old model
 	}
+
 	return;
 }
 
@@ -802,6 +830,8 @@ void ModelManager::Update(double avg_reward, bool cache_model, bool &updated,
 	auto processed = PPO::count_of_episodes() * ((double)(count_replays - count_replays % (mini_batch_size * count_mini_batches)) / (double)count_replays);
 	episodes_processed += processed;
 
+	//scheduler->step(avg_reward);
+
 	if(cache_model)
 	{
 		ActorCritic old_model;
@@ -837,11 +867,8 @@ void ModelManager::Update(double avg_reward, bool cache_model, bool &updated,
 	}
 
 
-	/*if(0.5 * avg_critic_loss + avg_actor_loss < ent_coef * avg_entropy)
-	{
-		ent_coef *= ent_decay_factor;
-		ent_coef = std::max(min_ent_coef, ent_coef);
-	}*/
+	//ent_coef = ent_coef - (1e-2 - min_ent_coef) / 100.;
+	//ent_coef = std::max(min_ent_coef, ent_coef);
 
 	if(!old_ac.empty())
 	{

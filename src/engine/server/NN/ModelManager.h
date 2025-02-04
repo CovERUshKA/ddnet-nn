@@ -137,6 +137,8 @@ struct ModelManager
 		double &avg_actor_activation_mean, double &avg_actor_activation_std,
 		double &critic_mean_absolute_error, double &critic_correlation_coefficient,
 		double &avg_angle_entropy, double &avg_hook_entropy, double &avg_hammer_entropy, double &avg_direction_entropy);
+
+	bool IsOldModel(int id);
 	void ReassignOldModels();
 
 	void Save(std::string filename);

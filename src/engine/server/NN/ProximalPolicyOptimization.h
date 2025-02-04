@@ -766,10 +766,10 @@ auto PPO::update(ActorCritic &ac, ActorCritic &ac_work,
 	torch::Tensor total_critic_loss_tensor = torch::zeros({}, torch::kCUDA); // Initialize tensor to accumulate critic loss
 	torch::Tensor total_entropy_tensor = torch::zeros({}, torch::kCUDA); // Initialize tensor to accumulate entropy
 
-	torch::Tensor total_angle_entropy_tensor = torch::zeros({}, torch::kCUDA); // Initialize tensor to accumulate entropy
-	torch::Tensor total_hook_entropy_tensor = torch::zeros({}, torch::kCUDA); // Initialize tensor to accumulate entropy
-	torch::Tensor total_hammer_entropy_tensor = torch::zeros({}, torch::kCUDA); // Initialize tensor to accumulate entropy
-	torch::Tensor total_direction_entropy_tensor = torch::zeros({}, torch::kCUDA); // Initialize tensor to accumulate entropy
+	torch::Tensor total_angle_entropy_tensor = torch::zeros({}, torch::kCUDA); // Initialize tensor to accumulate angle entropy
+	torch::Tensor total_hook_entropy_tensor = torch::zeros({}, torch::kCUDA); // Initialize tensor to accumulate hook entropy
+	torch::Tensor total_hammer_entropy_tensor = torch::zeros({}, torch::kCUDA); // Initialize tensor to accumulate hammer entropy
+	torch::Tensor total_direction_entropy_tensor = torch::zeros({}, torch::kCUDA); // Initialize tensor to accumulate direction entropy
 
 	torch::Tensor total_actor_grad_norm = torch::zeros({}, torch::kCUDA);
 	torch::Tensor total_critic_grad_norm = torch::zeros({}, torch::kCUDA);
@@ -783,53 +783,8 @@ auto PPO::update(ActorCritic &ac, ActorCritic &ac_work,
 	int count_mini_batches_processed = 0;
 
 	{
-		//std::deque<torch::Tensor> states, actions, values, log_probs;
-		//std::deque<std::vector<float>> rewards;
-		//std::deque<std::vector<bool>> dones;
 		// Wait for all log probs to come to cpu
 		at::cuda::getCurrentCUDAStream().synchronize();
-		//at::cuda::stream_synchronize(at::cuda::getCurrentCUDAStream());
-		//printf("1\n");
-		//printf("1\n");
-		//for(size_t i = 0; i < saved_size / mini_batch_size /*&&  i < epochs*/; i++)
-		//{
-		//	//printf("1.0 %llu %llu %d\n", i, replay_buffer->size(), mini_batch_size);
-		//	auto [state, action, log_prob, reward, done] = replay_buffer->sample(mini_batch_size, i);
-		//	states.push_back(state);
-		//	actions.push_back(action);
-		//	log_probs.push_back(log_prob);
-		//	rewards.push_back(reward);
-		//	dones.push_back(done);
-		//	//printf("1.1\n");
-
-		//	//state = state.to(device, true);
-		//	//printf("1.2\n");
-		//	{
-		//		//printf("1.2.1\n");
-		//		torch::Tensor cpy_inputs = state.index({"...", torch::indexing::Slice(0, 78)});
-		//		//printf("UPDATING0.3\n");
-		//		//std::cout << state.sizes() << std::endl;
-		//		torch::Tensor cpy_blocks = torch::one_hot(state.index({"...", torch::indexing::Slice(78, 1167)}).to(torch::kInt64), 3).to(torch::kF32).view({(long long)state.size(0), -1});
-		//		//printf("UPDATING0.4\n");
-		//		auto cpy_state_forward = torch::cat({cpy_inputs, cpy_blocks}, 1);
-		//		//printf("UPDATING0.5\n");
-		//		//std::cout << cpy_inputs.sizes() << std::endl;
-		//		//std::cout << cpy_blocks.sizes() << std::endl;
-		//		try
-		//		{
-		//			values.push_back(ac->critic_forward(cpy_state_forward).detach());
-		//		}
-		//		catch(const std::exception &e)
-		//		{
-		//			std::cout << e.what() << std::endl;
-		//		}
-		//		//printf("UPDATING0.6\n");
-		//	}
-		//	
-		//}
-		//std::cout << replay_buffer->size() << std::endl;
-		//std::cout << mini_batch_size << std::endl;
-		//std::cout << replay_buffer->size() / mini_batch_size << std::endl;
 		//printf("2\n");
 		//Sleep(5000);
 		
@@ -893,20 +848,20 @@ auto PPO::update(ActorCritic &ac, ActorCritic &ac_work,
 				//torch::Tensor entropy = ac->entropy(action).mean();
 				//std::cout << action.slice(0, 0, 10) << std::endl;
 
-				auto angle_entropy = ac->entropy_gaussian().expand({action.size(0)}) / (1.42 * 2);
+				auto angle_entropy = ac->entropy_gaussian().expand({action.size(0)}) / (1.42 * 2); // 1.42 * 2
 
 				auto probs = torch::sigmoid(action.slice(1, 5, 6)); // Shape [batch_size, 1]
-				auto hook_entropy = ac->entropy_bernoulli(probs) / log(2);
+				auto hook_entropy = ac->entropy_bernoulli(probs) / log(2); // log(2)
 				probs = torch::sigmoid(action.slice(1, 6, 7)); // Shape [batch_size, 1]
-				auto hammer_entropy = ac->entropy_bernoulli(probs) / log(2);
+				auto hammer_entropy = ac->entropy_bernoulli(probs) / log(2); // log(2)
 
 				probs = torch::softmax(action.slice(1, 2, 5), 1); // Shape [batch_size, 3]
-				auto direction_entropy = ac->entropy_categorical(probs) / log(3);
+				auto direction_entropy = ac->entropy_categorical(probs) / log(3); // log(3)
 
 				hook_entropy = hook_entropy.squeeze(-1); // Convert from [batch_size, 1] to [batch_size]
 				hammer_entropy = hammer_entropy.squeeze(-1);
 
-				torch::Tensor entropy = (angle_entropy * 0.3 + hook_entropy + hammer_entropy + direction_entropy).mean();
+				torch::Tensor entropy = (angle_entropy * 0.625 + hook_entropy + hammer_entropy + direction_entropy).mean();
 
 				//printf("calculated\n");
 
@@ -1010,7 +965,12 @@ auto PPO::update(ActorCritic &ac, ActorCritic &ac_work,
 				{
 					opt->step();
 					opt->zero_grad();
-					//ac->log_std_ = ac->log_std_.clamp(-2.0, 0.5); // Example bounds
+
+					// Clamp log_std_ so it will not rise infinetly
+					//{
+					//	//torch::NoGradGuard no_grad; // Disable gradient tracking
+					//	ac->log_std_.clamp_(-3.0, 0); // -3.0 0
+					//}
 					count_mini_batches_processed = 0;
 				}
 				if(ac->log_std_.isnan().any().item<bool>() || ac->log_std_.isinf().any().item<bool>())
