@@ -194,6 +194,7 @@ void CNeuralNetwork::ChangeSwitchState(int Number, int Team, bool state)
 void CNeuralNetwork::RespawnTeam(int Team)
 {
 	int ball_id = (Team - 1) * 3 + 2;
+
 	for(size_t i = 0; i < 3; i++)
 	{
 		auto bot = vBots[(Team - 1) * 3 + i];
@@ -266,6 +267,7 @@ void CNeuralNetwork::RespawnTeam(int Team)
 	ChangeSwitchState(32, Team, true);
 
 	vBots[ball_id]->GetCharacter()->SetDeepFrozen(true);
+	vTeamTickCounter[Team - 1] = 0;
 }
 
 void CNeuralNetwork::StartFight(CPlayer* player, bool right_side)
@@ -414,6 +416,7 @@ void CNeuralNetwork::OnInit()
 			vInputInputs.resize(count_player_bots);
 			// vInputBlocks.resize(count_bots);
 			vOutputs.resize(count_player_bots);
+			vTeamTickCounter.assign(count_teams, 0);
 			// vIsPreviouslyHooked.resize(count_bots);
 			// vPrevHookPos.resize(count_bots);
 			// vBotsSpawnPos.resize(count_bots);
@@ -962,7 +965,7 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 	static float bot_is_grabbed_reward = 0.1f; // If the bot is currently grabbed to wall/ball applies to every tick
 	static float bot_is_holding_ball_reward = 0.05f; // If the bot is currently holding ball using hook it rewards every tick
 	static float bot_moving_towards_ball_reward = 0.1f; // Not implemented
-	static float bot_hitted_ball_reward = 2.0f; // Rewards bot for hitting ball
+	static float bot_hitted_ball_reward = 1.0f; // Rewards bot for hitting ball
 
 	// Misses
 	static float bot_hammer_missed_reward = -0.2f; // Applies when bots hammer not hitted anything
@@ -972,7 +975,9 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 	static float step_reward = -0.02f; // -0.001f Applies every tick
 	static float divide_reward_by = 5.f;
 
-	static int long_no_improvements_ticks = 200;
+	static int force_stop_tick = 2000;
+
+	static int current_old_shuffle_counter = 0; // Save 1 old per 4 current
 
 	//static std::vector<float> rewards;
 	static float best_average = 0.f;
@@ -1112,13 +1117,23 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 			first_bot_reward += first_bot_character->m_FreezeTime ? being_in_freeze_reward : 0;
 			second_bot_reward += second_bot_character->m_FreezeTime ? being_in_freeze_reward : 0;
 
-			if(IsSwitchEnabled(4, team_id+1))
+			if(IsSwitchEnabled(4, team_id + 1) 
+				|| (vTeamTickCounter[team_id] >= force_stop_tick && ((!team_with_old && current_old_shuffle_counter > 0) || (team_with_old && current_old_shuffle_counter == 0))))
 			{
 				match_is_done = true;
 
 				if(team_with_old)
 				{
 					count_episodes_with_old += 1;
+				}
+
+				if(current_old_shuffle_counter == 0 || team_with_old)
+				{
+					current_old_shuffle_counter = 4;
+				}
+				else
+				{
+					current_old_shuffle_counter -= 1;
 				}
 
 				// Respawn everyone in team
@@ -1206,6 +1221,7 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 			second_bot_cumulative_reward += second_bot_reward;
 			model_manager->Reward(first_bot_reward / divide_reward_by, false, match_is_done);
 			model_manager->Reward(second_bot_reward / divide_reward_by, false, match_is_done);
+			vTeamTickCounter[team_id] += 1;
 		}
 		bool is_full = false;
 

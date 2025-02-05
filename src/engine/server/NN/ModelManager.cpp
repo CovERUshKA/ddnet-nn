@@ -12,9 +12,9 @@
 #include <ATen/cuda/CUDAGraph.h>
 #include <torch/optim/schedulers/reduce_on_plateau_scheduler.h>
 
-#include <algorithm> // For std::for_each
-#include <execution> // For std::execution::par
-#include <future> // For std::async and std::future
+//#include <algorithm> // For std::for_each
+//#include <execution> // For std::execution::par
+//#include <future> // For std::async and std::future
 #include <nvToolsExt.h>
 #include <filesystem>
 
@@ -35,7 +35,7 @@ int64_t count_mini_batches = 1;
 int64_t max_mini_batch_size = 8000; // 4096, 8192, 16384, 32768
 int64_t ppo_epochs = 4;
 double ent_coef = 2e-3; // Entropy coefficient
-double min_ent_coef = 2e-3;
+double min_ent_coef = 3e-4;
 double ent_decay_factor = 0.95;
 double clip_param = 0.2; // Default: 0.2
 float gamma = 0.99f; // Default: 0.99f Discount factor
@@ -152,32 +152,32 @@ ModelManager::ModelManager(bool is_training, std::string train_folder, size_t ba
 
 	opt = std::make_shared<torch::optim::Adam>(param_groups);
 
-	std::string load_folder_path = "train\\1738668446598";
-	std::string load_main_model_name = "best";
+	std::string load_folder_path = "train\\1738703513584";
+	std::string load_main_model_name = "last";
 	bool load_previous = true;
-	LoadModels(load_folder_path, load_main_model_name, load_previous);
+	//LoadModels(load_folder_path, load_main_model_name, load_previous);
 	scheduler = std::make_shared<torch::optim::ReduceLROnPlateauScheduler>(*opt, /* mode */ torch::optim::ReduceLROnPlateauScheduler::max, /* factor */ 0.5, /* patience */ 10);
 	/*for(auto &param_group : opt->param_groups())
 	{
 		std::cout << param_group.options().get_lr() << std::endl;
-		if(param_group.options().get_lr() == actor_learning_rate)
+		if(param_group.options().get_lr() == actor_learning_rate / 2.)
 		{
 			printf("Setting\n");
-			param_group.options().set_lr(actor_learning_rate / 2.);
+			param_group.options().set_lr(actor_learning_rate);
 			printf("Setted\n");
 		}
 
-		if(param_group.options().get_lr() == critic_learning_rate)
+		if(param_group.options().get_lr() == critic_learning_rate / 2.)
 		{
 			printf("Setting\n");
-			param_group.options().set_lr(critic_learning_rate / 2.);
+			param_group.options().set_lr(critic_learning_rate);
 			printf("Setted\n");
 		}
 
-		if(param_group.options().get_lr() == log_std_learning_rate)
+		if(param_group.options().get_lr() == log_std_learning_rate / 2.)
 		{
 			printf("Setting\n");
-			param_group.options().set_lr(log_std_learning_rate / 2.);
+			param_group.options().set_lr(log_std_learning_rate);
 			printf("Setted\n");
 		}
 	}*/
@@ -867,7 +867,7 @@ void ModelManager::Update(double avg_reward, bool cache_model, bool &updated,
 	}
 
 
-	//ent_coef = ent_coef - (1e-2 - min_ent_coef) / 100.;
+	//ent_coef -=  (1e-3 - min_ent_coef) / 100.;
 	//ent_coef = std::max(min_ent_coef, ent_coef);
 
 	if(!old_ac.empty())

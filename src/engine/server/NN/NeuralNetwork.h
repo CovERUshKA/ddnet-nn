@@ -39,6 +39,7 @@ class CNeuralNetwork : public IInterface
 	//std::vector<float> vBotsCumulativeRewards;
 	std::vector<ModelInputInputs> vInputInputs;
 	std::vector<ModelOutput> vOutputs;
+	std::vector<int> vTeamTickCounter;
 
 	// First is distance, second is tick
 	//std::vector<std::pair<int, int>> vBotBestDistance;
