@@ -27,4 +27,4 @@ Steps to build on Windows:
 6) Now try to compile DDNet-Server.
 7) Copy DLL-s from libtorch folder to run it
 
-Example of trained neural network - https://www.youtube.com/watch?v=LaiUJSzhEJc
+Example of trained neural network - https://www.youtube.com/watch?v=wE9gz55kYRM
