@@ -2,7 +2,7 @@
 
 Example of trained neural network - https://www.youtube.com/watch?v=g63a2TTIJu8
 
-## Compile
+## Build instruction
 To compile you would need to install libtorch with cuda support.
 
 ### Steps to build on Windows
