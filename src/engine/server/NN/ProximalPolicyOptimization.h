@@ -68,7 +68,7 @@ public:
 		//rewards.resize(capacity);
 		states = torch::empty({(long long)capacity, 40}, torch::kCUDA);
 		actions = torch::empty({(long long)capacity, 5}, torch::kCUDA);
-		log_probs = torch::empty({(long long)capacity, 5}, torch::kCUDA);
+		log_probs = torch::empty({(long long)capacity, 1}, torch::kCUDA);
 		values = torch::empty({(long long)capacity, 1}, torch::kCUDA);
 		returns = torch::empty({(long long)capacity, 1}, torch::kCUDA);
 		//v_all_indices.resize(capacity);
@@ -765,6 +765,9 @@ auto PPO::update(ActorCritic &ac, ActorCritic &ac_work,
 	torch::Tensor total_actor_loss_tensor = torch::zeros({}, torch::kCUDA); // Initialize tensor to accumulate actor loss
 	torch::Tensor total_critic_loss_tensor = torch::zeros({}, torch::kCUDA); // Initialize tensor to accumulate critic loss
 	torch::Tensor total_entropy_tensor = torch::zeros({}, torch::kCUDA); // Initialize tensor to accumulate entropy
+	//torch::Tensor max_entropy_tensor = torch::zeros({}, torch::kCUDA); // Initialize tensor to save max entropy
+	//torch::Tensor median_entropy_tensor = torch::zeros({}, torch::kCUDA); // Initialize tensor to save median entropy
+	//torch::Tensor mode_entropy_tensor = torch::zeros({}, torch::kCUDA); // Initialize tensor to save mode entropy
 
 	torch::Tensor total_angle_entropy_tensor = torch::zeros({}, torch::kCUDA); // Initialize tensor to accumulate angle entropy
 	torch::Tensor total_hook_entropy_tensor = torch::zeros({}, torch::kCUDA); // Initialize tensor to accumulate hook entropy
@@ -848,9 +851,20 @@ auto PPO::update(ActorCritic &ac, ActorCritic &ac_work,
 				//torch::Tensor entropy = ac->entropy(action).mean();
 				//std::cout << action.slice(0, 0, 10) << std::endl;
 
-				auto angle_entropy = ac->entropy_gaussian().expand({action.size(0)}) / (1.42 * 2); // 1.42 * 2
+				// Bound it between lower_bound and upper_bound:
+				double lower_bound = -4.0;
+				double upper_bound = 0.0;
+				auto log_std = lower_bound + (upper_bound - lower_bound) * ((torch::tanh(action.slice(1, 7, 9)) + 1) / 2);
+				//auto log_std = action.slice(1, 7, 9);
+				//std::cout << log_std.sizes() << std::endl;
+				//auto log_std_penalty = torch::relu(action.slice(1, 7, 9) - 2);
+				//auto log_std = action.slice(1, 7, 9)/*.clamp_max(0)*/;
 
-				auto probs = torch::sigmoid(action.slice(1, 5, 6)); // Shape [batch_size, 1]
+				auto angle_entropy = ac->entropy_gaussian(log_std) / (1.42 * 2); // 1.42 * 2
+				//std::cout << angle_entropy.sizes() << std::endl;
+
+
+				auto probs = action.slice(1, 5, 6); // Shape [batch_size, 1]
 				auto hook_entropy = ac->entropy_bernoulli(probs) / log(2); // log(2)
 				probs = torch::sigmoid(action.slice(1, 6, 7)); // Shape [batch_size, 1]
 				auto hammer_entropy = ac->entropy_bernoulli(probs) / log(2); // log(2)
@@ -860,6 +874,10 @@ auto PPO::update(ActorCritic &ac, ActorCritic &ac_work,
 
 				hook_entropy = hook_entropy.squeeze(-1); // Convert from [batch_size, 1] to [batch_size]
 				hammer_entropy = hammer_entropy.squeeze(-1);
+
+				//max_entropy_tensor = angle_entropy.max();
+				//median_entropy_tensor = angle_entropy.median();
+				//mode_entropy_tensor = angle_entropy.mode(0);
 
 				torch::Tensor entropy = (angle_entropy * 0.625 + hook_entropy + hammer_entropy + direction_entropy).mean();
 
@@ -874,22 +892,17 @@ auto PPO::update(ActorCritic &ac, ActorCritic &ac_work,
 				//Sleep(6000);
 				// printf("UPDATING1.4\n");
 				torch::Tensor old_log_prob = cpy_log;
-				//std::cout << old_log_prob.slice(0 ,0, 10) << std::endl;
-				//std::cout << "New log prob mean: " << new_log_prob.mean().item<double>() << ", std: " << new_log_prob.std().item<double>() << std::endl;
-				//std::cout << "Old log prob mean: " << old_log_prob.mean().item<double>() << ", std: " << old_log_prob.std().item<double>() << std::endl;
-				//std::cout << "New log prob min: " << new_log_prob.min().item<double>() << ", max: " << new_log_prob.max().item<double>() << std::endl;
-				//std::cout << "Old log prob min: " << old_log_prob.min().item<double>() << ", max: " << old_log_prob.max().item<double>() << std::endl;
 				//std::cout << "Begin" << std::endl;
 				//std::cout << new_log_prob.slice(0, 0, 10) << std::endl;
 				//std::cout << old_log_prob.slice(0, 0, 10) << std::endl;
 				// printf("UPDATING1.4.1\n");
-				//  std::cout << new_log_prob.sizes() << " " << old_log_prob.sizes() << std::endl;
+				//std::cout << new_log_prob.sizes() << " " << old_log_prob.sizes() << std::endl;
 				auto ratio = (new_log_prob - old_log_prob).exp();
 				//std::cout << "Ratio mean: " << ratio.mean().item<double>() << ", std: " << ratio.std().item<double>() << std::endl;
 				//std::cout << "Ratio min: " << ratio.min().item<double>() << ", max: " << ratio.max().item<double>() << std::endl;
 				// printf("UPDATING1.5\n");
-				//  std::cout << ratio.sizes() << std::endl;
-				//  std::cout << cpy_adv.sizes() << std::endl;
+				//std::cout << ratio.sizes() << std::endl;
+				//std::cout << cpy_adv.sizes() << std::endl;
 				auto surr1 = ratio * cpy_adv;
 				// printf("UPDATING1.5.1\n");
 				auto surr2 = torch::clamp(ratio, 1. - clip_param, 1. + clip_param) * cpy_adv;
@@ -918,6 +931,10 @@ auto PPO::update(ActorCritic &ac, ActorCritic &ac_work,
 				{
 					std::cout << "Exception during backward pass: " << e.what() << std::endl;
 				}
+
+				// Global gradient clipping specific to PPO
+				torch::nn::utils::clip_grad_norm_(ac->parameters(), 0.5f);
+				//torch::nn::utils::clip_grad_norm_(ac->critic_network->parameters(), 0.5f);
 
 				// Compute gradient norms
 				double actor_grad_norm = 0.0;
@@ -973,86 +990,6 @@ auto PPO::update(ActorCritic &ac, ActorCritic &ac_work,
 					//}
 					count_mini_batches_processed = 0;
 				}
-				if(ac->log_std_.isnan().any().item<bool>() || ac->log_std_.isinf().any().item<bool>())
-				{
-					std::cout << "Nan or inf detected in log_std_ after opt->step()" << std::endl;
-					std::cout << states.sizes() << std::endl;
-					std::cout << actions.sizes() << std::endl;
-					std::cout << log_probs.sizes() << std::endl;
-					std::cout << values.sizes() << std::endl;
-					std::cout << returns.sizes() << std::endl;
-					std::cout << entropy << std::endl;
-					std::cout << actor_loss << std::endl;
-					std::cout << critic_loss << std::endl;
-					std::cout << loss << std::endl;
-					std::cout << "States - Mean: " << states.mean().item<double>()
-						  << ", Std: " << states.std().item<double>()
-						  << ", Min: " << states.min().item<double>()
-						  << ", Max: " << states.max().item<double>()
-						  << ", NaN Count: " << torch::isnan(states).sum().item<int64_t>()
-						  << ", Inf Count: " << torch::isinf(states).sum().item<int64_t>() << std::endl;
-					std::cout << "States (First 5 elements): " << states.index({torch::indexing::Slice(0, 5)}) << std::endl;
-
-					std::cout << "Actions - Mean: " << actions.mean().item<double>()
-						  << ", Std: " << actions.std().item<double>()
-						  << ", Min: " << actions.min().item<double>()
-						  << ", Max: " << actions.max().item<double>()
-						  << ", NaN Count: " << torch::isnan(actions).sum().item<int64_t>()
-						  << ", Inf Count: " << torch::isinf(actions).sum().item<int64_t>() << std::endl;
-
-					std::cout << "Values - Mean: " << values.mean().item<double>()
-						  << ", Std: " << values.std().item<double>()
-						  << ", Min: " << values.min().item<double>()
-						  << ", Max: " << values.max().item<double>()
-						  << ", NaN Count: " << torch::isnan(values).sum().item<int64_t>()
-						  << ", Inf Count: " << torch::isinf(values).sum().item<int64_t>() << std::endl;
-
-					std::cout << "Returns - Mean: " << returns.mean().item<double>()
-						  << ", Std: " << returns.std().item<double>()
-						  << ", Min: " << returns.min().item<double>()
-						  << ", Max: " << returns.max().item<double>()
-						  << ", NaN Count: " << torch::isnan(returns).sum().item<int64_t>()
-						  << ", Inf Count: " << torch::isinf(returns).sum().item<int64_t>() << std::endl;
-
-					std::cout << "Old Log Prob - Mean: " << old_log_prob.mean().item<double>()
-						  << ", Std: " << old_log_prob.std().item<double>()
-						  << ", Min: " << old_log_prob.min().item<double>()
-						  << ", Max: " << old_log_prob.max().item<double>() << std::endl;
-
-					std::cout << "New Log Prob - Mean: " << new_log_prob.mean().item<double>()
-						  << ", Std: " << new_log_prob.std().item<double>()
-						  << ", Min: " << new_log_prob.min().item<double>()
-						  << ", Max: " << new_log_prob.max().item<double>() << std::endl;
-
-					std::cout << "Advantages - Mean: " << cpy_adv.mean().item<double>()
-						  << ", Std: " << cpy_adv.std().item<double>()
-						  << ", Min: " << cpy_adv.min().item<double>()
-						  << ", Max: " << cpy_adv.max().item<double>() << std::endl;
-
-					for(const auto &param : ac->actor_parameters())
-					{
-						if(param.grad().defined())
-						{
-							std::cout << "Actor Grad - Mean: " << param.grad().mean().item<double>()
-								  << ", Std: " << param.grad().std().item<double>()
-								  << ", Min: " << param.grad().min().item<double>()
-								  << ", Max: " << param.grad().max().item<double>() << std::endl;
-						}
-					}
-
-					std::cout << "Entropy: " << entropy.item<double>()
-						  << ", Log Std - Mean: " << ac->log_std_.mean().item<double>()
-						  << ", Std: " << ac->log_std_.std().item<double>()
-						  << ", Min: " << ac->log_std_.min().item<double>()
-						  << ", Max: " << ac->log_std_.max().item<double>() << std::endl;
-
-					auto clipped_ratio = torch::clamp(ratio, 1. - clip_param, 1. + clip_param);
-					std::cout << "Clipped Ratio - Mean: " << clipped_ratio.mean().item<double>()
-						  << ", Std: " << clipped_ratio.std().item<double>()
-						  << ", Min: " << clipped_ratio.min().item<double>()
-						  << ", Max: " << clipped_ratio.max().item<double>() << std::endl;
-					system("PAUSE");
-				}
 				if(ac->actor_network->parameters()[0].isnan().any().item<bool>() || ac->actor_network->parameters()[0].isinf().any().item<bool>())
 				{
 					std::cout << "Nan or inf detected in actor_network parameters" << std::endl;
@@ -1079,6 +1016,15 @@ auto PPO::update(ActorCritic &ac, ActorCritic &ac_work,
 						  << ", Max: " << actions.max().item<double>()
 						  << ", NaN Count: " << torch::isnan(actions).sum().item<int64_t>()
 						  << ", Inf Count: " << torch::isinf(actions).sum().item<int64_t>() << std::endl;
+					std::cout << "Actions (First 5 elements): " << actions.index({torch::indexing::Slice(0, 2000)}) << std::endl;
+
+					// Find the maximum value and the index of the maximum value
+					torch::Tensor max_value_tensor = std::get<0>(actions.max(1)); // Max value along the first dimension (rows)
+					int64_t max_index = max_value_tensor.argmax().item<int64_t>(); // Index of max value
+
+					// Print the row with the maximum value
+					std::cout << "Row index with max value: " << max_index << std::endl;
+					std::cout << "Values in that row: " << actions[max_index] << std::endl;
 
 					std::cout << "Values - Mean: " << values.mean().item<double>()
 						  << ", Std: " << values.std().item<double>()
@@ -1120,11 +1066,11 @@ auto PPO::update(ActorCritic &ac, ActorCritic &ac_work,
 						}
 					}
 
-					std::cout << "Entropy: " << entropy.item<double>()
+					/*std::cout << "Entropy: " << entropy.item<double>()
 						  << ", Log Std - Mean: " << ac->log_std_.mean().item<double>()
 						  << ", Std: " << ac->log_std_.std().item<double>()
 						  << ", Min: " << ac->log_std_.min().item<double>()
-						  << ", Max: " << ac->log_std_.max().item<double>() << std::endl;
+						  << ", Max: " << ac->log_std_.max().item<double>() << std::endl;*/
 
 					auto clipped_ratio = torch::clamp(ratio, 1. - clip_param, 1. + clip_param);
 					std::cout << "Clipped Ratio - Mean: " << clipped_ratio.mean().item<double>()
@@ -1177,6 +1123,9 @@ auto PPO::update(ActorCritic &ac, ActorCritic &ac_work,
 	avg_hook_entropy = total_hook_entropy_tensor.item<double>() / count_updates;
 	avg_hammer_entropy = total_hammer_entropy_tensor.item<double>() / count_updates;
 	avg_direction_entropy = total_direction_entropy_tensor.item<double>() / count_updates;
+
+	//std::cout << "Max entropy: " << max_entropy_tensor << std::endl;
+	//std::cout << "Median entropy: " << median_entropy_tensor << std::endl;
 
 	//auto now = std::chrono::high_resolution_clock::now();
 	//std::cout << "Time to calculate loss: " << (float)(std::chrono::duration_cast<std::chrono::milliseconds>(now - decide_time).count()) << std::endl;

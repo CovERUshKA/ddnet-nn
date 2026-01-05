@@ -24,6 +24,9 @@
 
 #include <numeric>
 //#include <iostream>
+#include <filesystem>
+
+namespace fs = std::filesystem;
 
 using namespace std;
 
@@ -237,7 +240,7 @@ void CNeuralNetwork::RespawnTeam(int Team)
 		/*if (!model_manager->IsTraining())
 		{
 			char aFilename[IO_MAX_PATH_LENGTH];
-			str_format(aFilename, sizeof(aFilename), "%s_%s_%d_%llu.demo", m_pServer->m_aCurrentMap, name.c_str(), m_pServer->m_NetServer.Address().port, time_get());
+			str_format(aFilename, sizeof(aFilename), "%s_%s_%d_%llu.demo", m_pServer->m_aCurrentMap, name.c_str(), m_pServer->m_NetServer.Address().port, time_get_impl());
 			string path_demo = "train/" + dir_name + "/demos/" + aFilename;
 			int ret = m_pServer->m_aDemoRecorder[i].Start(m_pStorage, m_pConsole, path_demo.c_str(), m_pGameContext->NetVersion(), m_pServer->m_aCurrentMap, &m_pServer->m_aCurrentMapSha256[CServer::MAP_TYPE_SIX], m_pServer->m_aCurrentMapCrc[CServer::MAP_TYPE_SIX], "server", m_pServer->m_aCurrentMapSize[CServer::MAP_TYPE_SIX], m_pServer->m_apCurrentMapData[CServer::MAP_TYPE_SIX]);
 		}*/
@@ -353,8 +356,12 @@ void CNeuralNetwork::OnInit()
 	srand(Seed);
 
 	// Also define NEURAL_NETWORK_TRAINING in Visual Studio settings to speed up ticks and gain more control(disable auto spawn)
-	// !!!!!! Change MAX_CLIENTS and NET_MAX_CLIENTS to 64 if not training
+	// !!!!!! Change MAX_CLIENTS and NET_MAX_CLIENTS to 64 when you not training
+	#ifdef NEURAL_NETWORK_TRAINING
 	is_training = true;
+	#else
+	is_training = false;
+	#endif // NEURAL_NETWORK_TRAINING
 
 	skip_tick = 3;
 	cache_model_gap = 20;
@@ -365,6 +372,13 @@ void CNeuralNetwork::OnInit()
 	count_ticks = available_ticks_to_store / count_player_bots;
 	update_tick = count_ticks * skip_tick;
 	ticks_collected = last_update_tick = 0;
+
+	load_model = false;
+	load_previous = true;
+	load_folder_path = "train\\1740321083457";
+	load_main_model_name = "last";
+
+	bool record_initial_demo = false;
 
 	const CMapItemLayerTilemap *pTileMap = m_pGameContext->Layers()->GameLayer();
 	const CTile *pTiles = static_cast<CTile *>(Kernel()->RequestInterface<IMap>()->GetData(pTileMap->m_Data));
@@ -417,6 +431,8 @@ void CNeuralNetwork::OnInit()
 			// vInputBlocks.resize(count_bots);
 			vOutputs.resize(count_player_bots);
 			vTeamTickCounter.assign(count_teams, 0);
+			vLastTouchedBall.assign(count_teams, -1);
+			vBallControl.assign(count_teams, -1);
 			// vIsPreviouslyHooked.resize(count_bots);
 			// vPrevHookPos.resize(count_bots);
 			// vBotsSpawnPos.resize(count_bots);
@@ -447,7 +463,7 @@ void CNeuralNetwork::OnInit()
 				/*if (!model_manager->IsTraining())
 				{
 					char aFilename[IO_MAX_PATH_LENGTH];
-					str_format(aFilename, sizeof(aFilename), "%s_%s_%d_%llu.demo", m_pServer->m_aCurrentMap, name.c_str(), m_pServer->m_NetServer.Address().port, time_get());
+					str_format(aFilename, sizeof(aFilename), "%s_%s_%d_%llu.demo", m_pServer->m_aCurrentMap, name.c_str(), m_pServer->m_NetServer.Address().port, time_get_impl());
 					string path_demo = "train/" + dir_name + "/demos/" + aFilename;
 					int ret = m_pServer->m_aDemoRecorder[i].Start(m_pStorage, m_pConsole, path_demo.c_str(), m_pGameContext->NetVersion(), m_pServer->m_aCurrentMap, &m_pServer->m_aCurrentMapSha256[CServer::MAP_TYPE_SIX], m_pServer->m_aCurrentMapCrc[CServer::MAP_TYPE_SIX], "server", m_pServer->m_aCurrentMapSize[CServer::MAP_TYPE_SIX], m_pServer->m_apCurrentMapData[CServer::MAP_TYPE_SIX]);
 				}*/
@@ -458,94 +474,110 @@ void CNeuralNetwork::OnInit()
 	}
 
 	dbg_msg("neuralnetwork", "Initializing neural model...");
-	model_manager = new ModelManager(is_training, "train\\" + dir_name, available_ticks_to_store, count_player_bots, Seed);
+
+	try
+	{
+		model_manager = new ModelManager(is_training, "train\\" + dir_name, available_ticks_to_store, count_player_bots, Seed);
+		if(load_model)
+		{
+			dbg_msg("neuralnetwork", "Loading model...");
+			bool loaded = model_manager->LoadModels(load_folder_path, load_main_model_name, load_previous);
+			dbg_msg("neuralnetwork", "Model is loaded: %s", loaded ? "true" : "false");
+		}
+	}
+	catch(const std::exception &e)
+	{
+		std::cout << "Error during ModelManager initialization: " << e.what() << std::endl;
+	}
+
 	dbg_msg("neuralnetwork", "Model initialized.");
 
 	if(is_training)
 	{
-		dbg_msg("neuralnetwork", "Creating data.csv file for statistics...");
+		if(load_model && fs::exists(load_folder_path + "\\stats.csv"))
 		{
-			char aFilename[IO_MAX_PATH_LENGTH];
-			sprintf_s(aFilename,
-				sizeof(aFilename),
-				"lr%.1embs%lldppoe%lldbots%drpb%d.csv",
-				model_manager->GetLearningRate(),
-				model_manager->GetMiniBatchSize(),
-				model_manager->GetCountPPOEpochs(),
-				count_bots,
-				update_tick
-			);
-			logger.open("train\\" + dir_name + "\\" + aFilename);
-
-			// Define the CSV header using a vector
-			std::vector<std::string> header_columns = {
-				"Step",
-				"Count episodes",
-				"Count episodes with old",
-				"Cumulative ball hits",
-				"First bot cumulative score",
-				"Second bot cumulative score",
-				"Current bot cumulative score",
-				"Old bot cumulative score",
-				"Average freeze time",
-				"Average ball absolute velocity",
-				"Average ball velocity(x)",
-				"Average first bot reward",
-				"Average second bot reward",
-				"Highest reward per tick",
-				"TPS",
-				"Training loss",
-				"Actor loss",
-				"Critic loss",
-				"Critic Mean Absolute Error",
-				"Critic Correlation Coefficient",
-				"Entropy",
-				"Angle entropy",
-				"Hook entropy",
-				"Hammer entropy",
-				"Direction entropy",
-				"Entropy coefficient",
-				"Actor grad norm",
-				"Critic grad norm",
-				"Actor weight norm",
-				"Critic weight norm",
-				"Actor activation mean",
-				"Actor activation std",
-				"Learning rate",
-				"Time since start",
-				"Time to decide",
-				"Time to tick",
-				"Time rest",
-				"Time pre forward",
-				"Time forward",
-				"Time normal",
-				"Time to cpu",
-				"Time process last"};
-
-			// Write the CSV header
-			for(size_t i = 0; i < header_columns.size(); ++i)
-			{
-				logger << header_columns[i];
-				if(i < header_columns.size() - 1)
-				{
-					logger << ","; // Add a comma between columns
-				}
-			}
-			logger << endl;
+			dbg_msg("neuralnetwork", "Copying stats file from load folder...");
+			fs::copy_file(load_folder_path + "\\stats.csv", "train\\" + dir_name + "\\stats.csv");
+			logger.open("train\\" + dir_name + "\\stats.csv", std::ios_base::app);
+			dbg_msg("neuralnetwork", "Stats file copied.");
 		}
-		dbg_msg("neuralnetwork", "data.csv file created and initialized.");
+		else
+		{
+			dbg_msg("neuralnetwork", "Creating data.csv file for statistics...");
+			{
+				logger.open("train\\" + dir_name + "\\stats.csv");
+
+				// Define the CSV header using a vector
+				std::vector<std::string> header_columns = {
+					"Count episodes",
+					"Count episodes with old",
+					"Cumulative ball hits",
+					"First bot cumulative score",
+					"Second bot cumulative score",
+					"Current bot cumulative score",
+					"Old bot cumulative score",
+					"Average freeze time",
+					"Average ball absolute velocity",
+					"Average ball velocity(x)",
+					"Average first bot reward",
+					"Average second bot reward",
+					"Highest reward per tick",
+					"TPS",
+					"Training loss",
+					"Actor loss",
+					"Critic loss",
+					"Critic Mean Absolute Error",
+					"Critic Correlation Coefficient",
+					"Entropy",
+					"Angle entropy",
+					"Hook entropy",
+					"Hammer entropy",
+					"Direction entropy",
+					"Entropy coefficient",
+					"Actor grad norm",
+					"Critic grad norm",
+					"Actor weight norm",
+					"Critic weight norm",
+					"Actor activation mean",
+					"Actor activation std",
+					"Learning rate",
+					"Time since start",
+					"Time to decide",
+					"Time to tick",
+					"Time rest",
+					"Time pre forward",
+					"Time forward",
+					"Time normal",
+					"Time to cpu",
+					"Time process last"};
+
+				// Write the CSV header
+				for(size_t i = 0; i < header_columns.size(); ++i)
+				{
+					logger << header_columns[i];
+					if(i < header_columns.size() - 1)
+					{
+						logger << ","; // Add a comma between columns
+					}
+				}
+				logger << endl;
+			}
+			dbg_msg("neuralnetwork", "data.csv file created and initialized.");
+		}
+		
 	}
+
 
 	// Recording demo to spectate how model performs
 	string path_demo;
 	{
-		/*if(model_manager->IsTraining())
+		if(model_manager->IsTraining() && record_initial_demo)
 		{
 			char aFilename[IO_MAX_PATH_LENGTH];
-			str_format(aFilename, sizeof(aFilename), "%s_%d_%llu.demo", m_pServer->m_aCurrentMap, m_pServer->m_NetServer.Address().port, time_get());
+			str_format(aFilename, sizeof(aFilename), "%s_%d_%llu.demo", m_pServer->m_aCurrentMap, m_pServer->m_NetServer.Address().port, time_get_impl());
 			path_demo = "train/" + dir_name + "/demos/" + aFilename;
 			int ret = m_pServer->m_aDemoRecorder[MAX_CLIENTS].Start(m_pStorage, m_pConsole, path_demo.c_str(), m_pGameContext->NetVersion(), m_pServer->m_aCurrentMap, &m_pServer->m_aCurrentMapSha256[CServer::MAP_TYPE_SIX], m_pServer->m_aCurrentMapCrc[CServer::MAP_TYPE_SIX], "server", m_pServer->m_aCurrentMapSize[CServer::MAP_TYPE_SIX], m_pServer->m_apCurrentMapData[CServer::MAP_TYPE_SIX]);
-		}*/
+		}
 	}
 
 	ticks_timer = time_get_impl();
@@ -950,22 +982,25 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 	static int count_updated = 0;
 
 	// Rewards
-	static float goal_reward = 5.f; // Rewards when scoaring a goal
-	static float goal_penalize_reward = -3.f; // Penalizes if goaled on your side
+	static float goal_reward = 10.f; // Rewards when scoring a goal
+	static float goal_penalize_reward = -6.f; // Penalizes if goaled on your side
 
-	static float ball_on_spawn_reward = -0.1f; // -1.f There are 3 spawns. Center(at the start), left side and right side
-	static float ball_on_side_reward = 0.1f; // 0.05f If the ball is on your side it penalizes you, otherwise rewards you
-	static float ball_on_side_distance_reward = 0.1f; // 0.2f It means that if the ball is on your side and far from the net it always penalize you on that reward, if ball is half closer to net it penalize on half, but if on enemy side it rewards
+	// Spawn rewards
+	static float ball_on_center_spawn_reward = -0.3f; // -0.1f Center(at the start). This penalizes if both agents dont touch ball and it stays at spawn
+	static float ball_on_side_spawn_reward = -0.05f; // -0.1f There are 2 spawns. left side and right side. This penalizes if agents dont touch ball on their side spawn and it stays at spawn
+
+	static float ball_on_side_reward = 0.1f; // 0.1f If the ball is on your side it penalizes you, otherwise rewards you
+	static float ball_on_side_distance_reward = 0.1f; // 0.1f It means that if the ball is on your side and far from the net it always penalize you on that reward, if ball is half closer to net it penalize on half, but if on enemy side it rewards
 
 	// Hard to implement ideal finding distance from ball to goal
-	static float ball_moving_towards_net_reward = 0.3f; // 0.2f 10 If the ball is on your side it rewards for moving towards net, otherwise penalize. For example if ball moves from the farthest point to net in summ it would be this reward, so it calculates delta of moving to the net in %
-	static float ball_moving_towards_goal_reward = 0.03f; // 0.2f 10 On the enemy side it rewards if ball is moving toward goal
+	static float ball_moving_towards_net_reward = 0.5f; // 0.2f 10 If the ball is on your side it rewards for moving towards net, otherwise penalize. For example if ball moves from the farthest point to net in summ it would be this reward, so it calculates delta of moving to the net in %
+	static float ball_moving_towards_goal_reward = 0.5f; // 0.2f 10 On the enemy side it rewards if ball is moving toward goal
 
 	static float being_in_freeze_reward = -0.2f; // -0.1f if the bot is currently freezed it penalizes you on that reward
-	static float bot_is_grabbed_reward = 0.1f; // If the bot is currently grabbed to wall/ball applies to every tick
-	static float bot_is_holding_ball_reward = 0.05f; // If the bot is currently holding ball using hook it rewards every tick
+	static float bot_is_grabbed_reward = 0.05f; // If the bot is currently grabbed to wall/ball applies to every tick
+	static float bot_is_holding_ball_reward = 0.1f; // If the bot is currently holding ball using hook it rewards every tick
 	static float bot_moving_towards_ball_reward = 0.1f; // Not implemented
-	static float bot_hitted_ball_reward = 1.0f; // Rewards bot for hitting ball
+	static float bot_hitted_ball_reward = 0.5f; // Rewards bot for hitting ball
 
 	// Misses
 	static float bot_hammer_missed_reward = -0.2f; // Applies when bots hammer not hitted anything
@@ -973,9 +1008,9 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 
 	static float bot_teleported_reward = -1.f; // Applies when bot teleported with ground teleporter
 	static float step_reward = -0.02f; // -0.001f Applies every tick
-	static float divide_reward_by = 5.f;
+	static float divide_reward_by = 10.f;
 
-	static int force_stop_tick = 2000;
+	static int force_stop_tick = 2000; // 2000 INT_MAX
 
 	static int current_old_shuffle_counter = 0; // Save 1 old per 4 current
 
@@ -1026,7 +1061,11 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 				if (teleport_num == 1)
 				{
 					first_bot_reward += goal_penalize_reward;
-					second_bot_reward += goal_reward;
+					if(vBallControl[team_id] == 2)
+					{
+						second_bot_reward += goal_reward;
+					}
+					vBallControl[team_id] = 1;
 					second_bot_cumulative_score += 1;
 					if(team_with_old)
 					{
@@ -1038,8 +1077,12 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 				}
 				else
 				{
-					first_bot_reward += goal_reward;
+					if(vBallControl[team_id] == 1)
+					{
+						first_bot_reward += goal_reward;
+					}
 					second_bot_reward += goal_penalize_reward;
+					vBallControl[team_id] = 2;
 					first_bot_cumulative_score += 1;
 					if(team_with_old)
 					{
@@ -1086,6 +1129,7 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 				first_bot_character->m_HittedBall = false;
 				first_bot_reward += bot_hitted_ball_reward;
 				cumulative_ball_hits += 1;
+				vLastTouchedBall[team_id] = 1;
 			}
 
 			if(first_bot_character->m_HammerMissed)
@@ -1100,6 +1144,7 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 				second_bot_character->m_HittedBall = false;
 				second_bot_reward += bot_hitted_ball_reward;
 				cumulative_ball_hits += 1;
+				vLastTouchedBall[team_id] = 2;
 			}
 
 			if(second_bot_character->m_HammerMissed)
@@ -1109,10 +1154,16 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 			}
 
 			if (first_bot_character->GetCore().m_HookedPlayer && first_bot_character->GetCore().m_HookedPlayer % 3 == 2)
+			{
 				first_bot_reward += bot_is_holding_ball_reward;
+				vLastTouchedBall[team_id] = 1;
+			}
 
-			if(second_bot_character->GetCore().m_HookedPlayer && second_bot_character->GetCore().m_HookedPlayer % 3 == 2)
+			if (second_bot_character->GetCore().m_HookedPlayer && second_bot_character->GetCore().m_HookedPlayer % 3 == 2)
+			{
 				second_bot_reward += bot_is_holding_ball_reward;
+				vLastTouchedBall[team_id] = 2;
+			}
 
 			first_bot_reward += first_bot_character->m_FreezeTime ? being_in_freeze_reward : 0;
 			second_bot_reward += second_bot_character->m_FreezeTime ? being_in_freeze_reward : 0;
@@ -1143,6 +1194,14 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 			{
 				if(ball_pos.x > volleyball_area_start.x && ball_pos.y > volleyball_area_start.y && ball_pos.x < volleyball_area_end.x && ball_pos.y < volleyball_area_end.y)
 				{
+					if(ball_character->Core()->m_Vel.y < -2)
+					{
+						if(vLastTouchedBall[team_id] == 1)
+							vBallControl[team_id] = 1;
+						else if(vLastTouchedBall[team_id] == 2)
+							vBallControl[team_id] = 2;
+					}
+
 					cumulative_ball_speed_x += ball_character->Core()->m_Vel.x;
 					cumulative_ball_abs_speed += length(ball_character->Core()->m_Vel);
 					freeze_cumulative_time += first_bot_character->m_FreezeTime ? 1 : 0;
@@ -1160,6 +1219,14 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 						&& ball_last_pos.x < volleyball_area_end.x \
 						&& ball_last_pos.y < volleyball_area_end.y)
 					{
+						if(ball_last_pos.x > volleyball_area_center.x && ball_pos.x < volleyball_area_center.x)
+						{
+							vBallControl[team_id] = 2;
+						}
+						else if (ball_last_pos.x < volleyball_area_center.x && ball_pos.x > volleyball_area_center.x)
+						{
+							vBallControl[team_id] = 1;
+						}
 						float ball_to_line_last_distance_normalized = ClosestDistanceToDividingLine(ball_last_pos) / sqrtf(pow(13.5f, 2) + pow(9, 2)) / 32.f;
 						float ball_to_goal_distance_normalized = (abs(ball_last_pos.y - 118.5f * 32.f) - abs(ball_pos.y - 118.5f * 32.f)) / 32.f / 20.f;
 						float distance_change_reward = (ball_to_line_last_distance_normalized - ball_to_line_distance_normalized) * ball_moving_towards_net_reward;
@@ -1183,8 +1250,8 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 
 					if(volleyball_ball_center_spawn.x == cur_block_x && volleyball_ball_center_spawn.y == cur_block_y)
 					{
-						first_bot_reward += ball_on_spawn_reward;
-						second_bot_reward += ball_on_spawn_reward;
+						first_bot_reward += ball_on_center_spawn_reward;
+						second_bot_reward += ball_on_center_spawn_reward;
 						//printf("On center spawn\n");
 					}
 			
@@ -1193,7 +1260,7 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 						reward -= ball_on_side_reward + ball_on_side_distance_reward * ball_to_line_distance_normalized;
 						if(volleyball_ball_left_side_spawn.x == cur_block_x && volleyball_ball_left_side_spawn.y == cur_block_y)
 						{
-							first_bot_reward += ball_on_spawn_reward;
+							first_bot_reward += ball_on_side_spawn_reward;
 							//printf("On spawn left\n");
 						}
 					}
@@ -1202,7 +1269,7 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 						reward += ball_on_side_reward + ball_on_side_distance_reward * ball_to_line_distance_normalized;
 						if(volleyball_ball_right_side_spawn.x == cur_block_x && volleyball_ball_right_side_spawn.y == cur_block_y)
 						{
-							second_bot_reward += ball_on_spawn_reward;
+							second_bot_reward += ball_on_side_spawn_reward;
 							//printf("On spawn right\n");
 						}
 					}
@@ -1319,8 +1386,7 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 
 				model_manager->Save("train\\" + dir_name + "\\models\\last");
 
-				logger << count_updated
-				       << "," << count_episodes
+				logger << count_episodes
 				       << "," << count_episodes_with_old
 				       << "," << cumulative_ball_hits
 				       << "," << first_bot_cumulative_score
@@ -1419,7 +1485,7 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 			/*if(updated && count_updated % 20 == 1 && model_manager->IsTraining())
 			{
 				char aFilename[IO_MAX_PATH_LENGTH];
-				str_format(aFilename, sizeof(aFilename), "%s_%d_%llu.demo", m_pServer->m_aCurrentMap, m_pServer->m_NetServer.Address().port, time_get());
+				str_format(aFilename, sizeof(aFilename), "%s_%d_%llu.demo", m_pServer->m_aCurrentMap, m_pServer->m_NetServer.Address().port, time_get_impl());
 				string path_demo = "train\\" + dir_name + "\\demos\\" + aFilename;
 				int ret = demo_recorder->Start(m_pStorage, m_pConsole, path_demo.c_str(), m_pGameContext->NetVersion(), m_pServer->m_aCurrentMap, &m_pServer->m_aCurrentMapSha256[CServer::MAP_TYPE_SIX], m_pServer->m_aCurrentMapCrc[CServer::MAP_TYPE_SIX], "server", m_pServer->m_aCurrentMapSize[CServer::MAP_TYPE_SIX], m_pServer->m_apCurrentMapData[CServer::MAP_TYPE_SIX]);
 			}*/

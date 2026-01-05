@@ -22,11 +22,11 @@ namespace fs = std::filesystem;
 
 int64_t n_in = 40;
 int64_t n_out = 7;
-int64_t h_start = 1024; // 1024
-double std_dev = 0.37; // log(0.37) = -1
+int64_t h_start = 1024; // 1024 256
+double std_dev = 0.37; // log(0.37) ~ -1
 double learning_rate = 5e-5;
 double actor_learning_rate = 3e-4;
-double log_std_learning_rate = 1e-4;
+//double log_std_learning_rate = 1e-4;
 double critic_learning_rate = 1e-3;
 //double weight_decay = 0.0001;
 
@@ -34,9 +34,9 @@ int64_t mini_batch_size = 8000; // 4096, 8192, 16384, 32768
 int64_t count_mini_batches = 1;
 int64_t max_mini_batch_size = 8000; // 4096, 8192, 16384, 32768
 int64_t ppo_epochs = 4;
-double ent_coef = 2e-3; // Entropy coefficient
-double min_ent_coef = 3e-4;
-double ent_decay_factor = 0.95;
+double ent_coef = 1e-2; // Entropy coefficient
+//double min_ent_coef = 2e-3;
+//double ent_decay_factor = 0.95;
 double clip_param = 0.2; // Default: 0.2
 float gamma = 0.99f; // Default: 0.99f Discount factor
 float lambda = 0.95f; // GAE lambda
@@ -147,40 +147,39 @@ ModelManager::ModelManager(bool is_training, std::string train_folder, size_t ba
 							std::make_unique<torch::optim::AdamOptions>(actor_learning_rate)));
 	param_groups.push_back(torch::optim::OptimizerParamGroup({ac_update->critic_network->parameters()},
 							std::make_unique<torch::optim::AdamOptions>(critic_learning_rate)));
-	param_groups.push_back(torch::optim::OptimizerParamGroup({ac_update->log_std_},
-		std::make_unique<torch::optim::AdamOptions>(log_std_learning_rate)));
+	//param_groups.push_back(torch::optim::OptimizerParamGroup({ac_update->log_std_},
+		//std::make_unique<torch::optim::AdamOptions>(log_std_learning_rate)));
 
 	opt = std::make_shared<torch::optim::Adam>(param_groups);
 
-	std::string load_folder_path = "train\\1738703513584";
-	std::string load_main_model_name = "last";
-	bool load_previous = true;
-	//LoadModels(load_folder_path, load_main_model_name, load_previous);
 	scheduler = std::make_shared<torch::optim::ReduceLROnPlateauScheduler>(*opt, /* mode */ torch::optim::ReduceLROnPlateauScheduler::max, /* factor */ 0.5, /* patience */ 10);
-	/*for(auto &param_group : opt->param_groups())
-	{
-		std::cout << param_group.options().get_lr() << std::endl;
-		if(param_group.options().get_lr() == actor_learning_rate / 2.)
-		{
-			printf("Setting\n");
-			param_group.options().set_lr(actor_learning_rate);
-			printf("Setted\n");
-		}
+	opt->param_groups()[0].options().set_lr(actor_learning_rate);
+	opt->param_groups()[1].options().set_lr(critic_learning_rate);
 
-		if(param_group.options().get_lr() == critic_learning_rate / 2.)
-		{
-			printf("Setting\n");
-			param_group.options().set_lr(critic_learning_rate);
-			printf("Setted\n");
-		}
+	//for(auto &param_group : opt->param_groups())
+	//{
+	//	std::cout << param_group.options().get_lr() << std::endl;
+	//	if(param_group.options().get_lr() == actor_learning_rate)
+	//	{
+	//		printf("Setting\n");
+	//		param_group.options().set_lr(actor_learning_rate / 3.);
+	//		printf("Setted\n");
+	//	}
 
-		if(param_group.options().get_lr() == log_std_learning_rate / 2.)
-		{
-			printf("Setting\n");
-			param_group.options().set_lr(log_std_learning_rate);
-			printf("Setted\n");
-		}
-	}*/
+	//	if(param_group.options().get_lr() == critic_learning_rate)
+	//	{
+	//		printf("Setting\n");
+	//		param_group.options().set_lr(critic_learning_rate / 3.);
+	//		printf("Setted\n");
+	//	}
+
+	//	/*if(param_group.options().get_lr() == log_std_learning_rate)
+	//	{
+	//		printf("Setting\n");
+	//		param_group.options().set_lr(log_std_learning_rate);
+	//		printf("Setted\n");
+	//	}*/
+	//}
 	//Sleep(7000);
 	ac_update->to(device);
 	ac_work->to(device);
@@ -203,7 +202,7 @@ ModelManager::ModelManager(bool is_training, std::string train_folder, size_t ba
 	{
 		PPO::Initilize(batch_size, count_bots);
 		int botes = count_bots - old_bots_indexes.size();
-		ac_work->presample_normal((batch_size / botes) * 1.5, botes);
+		//ac_work->presample_normal((batch_size / botes) * 1.5, botes);
 		cout << "Learning rate: " << learning_rate
 		     << " Actor learning rate: " << actor_learning_rate
 		     << " Critic learning rate: " << critic_learning_rate
@@ -286,6 +285,7 @@ bool ModelManager::LoadModels(std::string folder_path, std::string main_model_na
 				old_model->Initialize(n_in, n_out, h_start, std_dev);
 				torch::load(old_model, model_path);
 				old_model->eval();
+				//old_model->copy_from(ac_update.get());
 				old_model->to(device);
 				old_ac.push_back(old_model);
 				fs::copy_file(model_path, new_model_path);
@@ -302,6 +302,20 @@ bool ModelManager::LoadModels(std::string folder_path, std::string main_model_na
 		}
 
 		std::cout << "Number of old models loaded: " << old_ac.size() << std::endl;
+	}
+
+	opt->param_groups()[0].options().set_lr(actor_learning_rate);
+	opt->param_groups()[1].options().set_lr(critic_learning_rate);
+
+	try
+	{
+		ac_work->copy_from(ac_update.get());
+		//*opt_work = *opt_update->load(;
+	}
+	catch(const std::exception &e)
+	{
+		std::cout << "ac_work->copy_from crashed with reason: " << e.what() << std::endl;
+		exit(1);
 	}
 
 	return true;
@@ -360,6 +374,7 @@ process_main_network(torch::Tensor av_current, bool validating = false)
 	torch::Tensor dir_logits = av_current.slice(1, 2, 5);
 	torch::Tensor hook_logits = av_current.slice(1, 5, 6);
 	torch::Tensor hammer_logits = av_current.slice(1, 6, 7);
+	torch::Tensor log_std_logits = av_current.slice(1, 7, 9);
 
 	auto angles = torch::tanh(angle_logits);
 	//printf("keke\n");
@@ -375,7 +390,14 @@ process_main_network(torch::Tensor av_current, bool validating = false)
 
 	if(ac_work->is_training() && !validating)
 	{
-		angles = ac_work->normal_angles(angles);
+		// Bound it between lower_bound and upper_bound:
+		double lower_bound = -4.0;
+		double upper_bound = 0.0;
+		auto log_std = lower_bound + (upper_bound - lower_bound) * ((torch::tanh(log_std_logits) + 1) / 2);
+		//auto log_std = log_std_logits/*.clamp_max(0)*/;
+
+		angles = ac_work->fast_normal(angles, log_std);
+		//std::cout << angles << std::endl;
 		hooks = sample_bernoulli_batch(hooks);
 		hammers = sample_bernoulli_batch(hammers);
 	}
@@ -522,7 +544,7 @@ std::vector<ModelOutput> ModelManager::Decide(
 	{
 		int model_id = input_to_model_id[old_indices[i]]; // get the model id for this input
 		auto av_old = old_ac[model_id]->actor_forward(old_states[i]);
-		old_batches.push_back(av_old.reshape({1, n_out})); // store the result for this old model
+		old_batches.push_back(av_old.reshape({1, ac_work->n_out})); // store the result for this old model
 	}
 	//std::cout << old_batches.size() << std::endl;
 	now = std::chrono::high_resolution_clock::now();
@@ -557,7 +579,7 @@ std::vector<ModelOutput> ModelManager::Decide(
 	for(size_t i = 0; i < old_batches.size(); ++i)
 	{
 		all_actions_sampled[old_indices[i]] = old_current_sampled[i]; // Place old model results in their original positions
-		all_actions_original[old_indices[i]] = old_batches[i].reshape({n_out});
+		all_actions_original[old_indices[i]] = old_batches[i].reshape({ac_work->n_out});
 	}
 	for(size_t i = 0; i < current_states.size(); ++i)
 	{
@@ -570,7 +592,7 @@ std::vector<ModelOutput> ModelManager::Decide(
 	//printf("4\n");
 	
 	// Concatenate all actions into a single tensor
-	auto tActions_original = torch::cat(all_actions_original, 0).reshape({(int)input_inputs.size(), n_out});
+	auto tActions_original = torch::cat(all_actions_original, 0).reshape({(int)input_inputs.size(), ac_work->n_out});
 	//printf("4.5\n");
 
 	auto tActions_sampled = torch::cat(all_actions_sampled, 0).reshape({(int)input_inputs.size(), 5});
@@ -836,11 +858,11 @@ void ModelManager::Update(double avg_reward, bool cache_model, bool &updated,
 	{
 		ActorCritic old_model;
 		old_model->Initialize(n_in, n_out, h_start, std_dev);
-		old_model->copy_from(ac_work.get());
+		old_model->copy_from(ac_update.get());
 		old_model->eval();
 		old_ac.push_back(old_model);
 		std::string file_name = to_string(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count());
-		torch::save(old_model, train_folder + "\\models\\previous\\" + file_name + "_model.pt");
+		torch::save(ac_update, train_folder + "\\models\\previous\\" + file_name + "_model.pt");
 		if(old_ac.size() > count_cached_old_models)
 		{
 			old_ac.pop_front();
@@ -866,9 +888,8 @@ void ModelManager::Update(double avg_reward, bool cache_model, bool &updated,
 		exit(1);
 	}
 
-
-	//ent_coef -=  (1e-3 - min_ent_coef) / 100.;
-	//ent_coef = std::max(min_ent_coef, ent_coef);
+	/*ent_coef -=  (1e-2 - min_ent_coef) / 300.;
+	ent_coef = std::max(min_ent_coef, ent_coef);*/
 
 	if(!old_ac.empty())
 	{
@@ -891,8 +912,8 @@ void ModelManager::Update(double avg_reward, bool cache_model, bool &updated,
 		//graph_recorded = false;
 	}
 
-	int botes = count_bots - old_bots_indexes.size();
-	ac_work->presample_normal((batch_size / botes) * 1.5, botes);
+	//int botes = count_bots - old_bots_indexes.size();
+	//ac_work->presample_normal((batch_size / botes) * 1.5, botes);
 
 	ac_work->copy_from(ac_update.get());
 	//std::cout << ac_work->is_training() << std::endl;

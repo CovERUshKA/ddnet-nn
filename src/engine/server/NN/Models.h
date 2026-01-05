@@ -20,7 +20,7 @@ struct ActorCriticImpl : public torch::nn::Module
     // Actor.
     torch::nn::Sequential actor_network;
     //torch::Tensor mu_;
-    torch::Tensor log_std_, normal_presampled;
+    //torch::Tensor log_std_, normal_presampled;
 
     // Critic.
     torch::nn::Sequential critic_network;
@@ -32,6 +32,7 @@ struct ActorCriticImpl : public torch::nn::Module
 
     bool Initialize(int64_t n_in, int64_t n_out, int64_t h_start, double std)
     {
+	    n_out += 2; // For log_std of angles
 	    this->n_in = n_in;
 	    this->n_out = n_out;
 	    actor_network = torch::nn::Sequential(
@@ -49,7 +50,7 @@ struct ActorCriticImpl : public torch::nn::Module
 		    //torch::nn::Tanh()
 		    );
 		//mu_ = torch::full(n_out, 0.);
-	    log_std_ = torch::full(2, std::log(std));
+	    //log_std_ = torch::full(2, std::log(std));
 		critic_network = torch::nn::Sequential(
 		    torch::nn::Linear(n_in, h_start),
 		    torch::nn::ReLU(),
@@ -63,11 +64,31 @@ struct ActorCriticImpl : public torch::nn::Module
 		    torch::nn::ReLU(),
 		    torch::nn::Linear(h_start / 16, 1)
 		);
+	    //printf("1\n");
+		// Get the last layer (final Linear layer)
+		auto &final_layer = std::dynamic_pointer_cast<torch::nn::LinearImpl>(actor_network->children().back());
+		//printf("2\n");
+
+		// Access the bias tensor
+		auto bias = final_layer->bias;
+	    //printf("3\n");
+
+		if(bias.defined())
+		{
+			torch::NoGradGuard no_grad;
+			//printf("4\n");
+			//std::cout << bias.sizes() << std::endl;
+ 			// Modify only the last two bias values
+			// 0.55 is -1 when transformed with tanh and other values
+			bias.index_put_({-2}, 0.55);
+			//printf("5\n");
+			bias.index_put_({-1}, 0.55);
+		}
 
 	    //printf("Created from 0\n");
 
 	    register_module("actor_network", actor_network);
-        register_parameter("log_std", log_std_);
+        //register_parameter("log_std", log_std_);
 	    register_module("critic_network", critic_network);
 	
 		//std::cout << log_std_ << std::endl;
@@ -82,11 +103,12 @@ struct ActorCriticImpl : public torch::nn::Module
 	    try
 	    {
 		    action = actor_network->forward(x);
+		    //action.slice(1, 7, 9) = -5.0 + 5.0 * torch::sigmoid(action.slice(1, 7, 9));
 	    }
 	    catch(const std::exception &e)
 	    {
 		    std::cout << "actor_network->forward crashed with reason: " << e.what() << std::endl;
-		    exit(1);
+		    system("PAUSE");
 	    }
 
 	    return action;
@@ -110,7 +132,7 @@ struct ActorCriticImpl : public torch::nn::Module
 	    critic_network = std::dynamic_pointer_cast<torch::nn::SequentialImpl>(other->critic_network->clone());
 
 	    // Copy the log_std_ parameter
-	    log_std_ = other->log_std_.detach().clone();
+	    //log_std_ = other->log_std_.detach().clone();
 	    if(!other->is_training())
 	    {
 		    this->eval();
@@ -121,7 +143,7 @@ struct ActorCriticImpl : public torch::nn::Module
 	    }
 	    //printf("Copied\n");
 	    register_module("actor_network", actor_network);
-	    register_parameter("log_std", log_std_);
+	    //register_parameter("log_std", log_std_);
 	    register_module("critic_network", critic_network);
     }
 
@@ -139,7 +161,7 @@ struct ActorCriticImpl : public torch::nn::Module
 		//std::cout << other->log_std_ << std::endl;
 
 	    // Copy the log_std_ parameter
-	    log_std_ = other->log_std_.clone();
+	    //log_std_ = other->log_std_.clone();
 	    if(!other->is_training())
 	    {
 		    this->eval();
@@ -163,8 +185,32 @@ struct ActorCriticImpl : public torch::nn::Module
 	    return critic_network->parameters();
     }
 
+	// Fast normal without synchronization that torch::normal do
+	torch::Tensor fast_normal(torch::Tensor mean, torch::Tensor log_std)
+    {
+	    // Ensure tensors are on CUDA
+	    TORCH_CHECK(mean.is_cuda() && log_std.is_cuda(), "Tensors must be on CUDA");
+
+	    // Generate two uniform random tensors (0,1)
+	    // rand_like outputs in range [0,1), so rotate it to avoid log(0) which is inf
+	    auto U1 = 1 - torch::rand_like(mean, torch::kCUDA);
+	    auto U2 = torch::rand_like(mean, torch::kCUDA);
+
+	    // Box-Muller transform
+	    auto R = torch::sqrt(-2.0 * torch::log(U1));
+	    auto theta = 2.0 * M_PI * U2;
+
+	    // Two independent normal samples
+	    auto Z = R * torch::cos(theta);
+
+		auto std = torch::exp(log_std);
+
+	    // Scale by std and shift by mean
+		return Z * std + mean;
+    }
+
 	// Forward pass.
-    auto normal_angles(torch::Tensor x) -> torch::Tensor
+    auto normal_angles(torch::Tensor x, torch::Tensor std) -> torch::Tensor
     {
 	    if(this->is_training())
 	    {
@@ -172,24 +218,24 @@ struct ActorCriticImpl : public torch::nn::Module
 		    try
 		    {
 			    //action = at::normal(x, log_std_.exp().expand_as(x));
-			    if(used_presamples >= count_presampled)
-			    {
-				    printf("presampled normals used off\n");
-				    presample_normal(normal_presampled.size(0), normal_presampled.size(1));
-			    }
-			    action.slice(1, 0, 2) += normal_presampled[used_presamples];
+			    //if(used_presamples >= count_presampled)
+			    //{
+				   // printf("presampled normals used off\n");
+				   // //presample_normal(normal_presampled.size(0), normal_presampled.size(1));
+			    //}
+			    action.slice(1, 0, 2) = fast_normal(action.slice(1, 0, 2), std);
 			    //action = x + normal_presampled[used_presamples];
 			    used_presamples += 1;
 		    }
 		    catch(const std::exception &e)
 		    {
 			    std::cout << "KEK: " << e.what() << std::endl;
-			    std::cout << "Sizes of log_std_:" << log_std_ << std::endl;
+			    //std::cout << "Sizes of log_std_:" << log_std_ << std::endl;
 			    /*std::cout << std << std::endl;
 			    std::cout << std.device() << std::endl;
 			    std::cout << std.dtype() << std::endl;
 			    std::cout << std.sizes() << std::endl;*/
-			    exit(1);
+			    system("PAUSE");
 		    }
 		    return action;
 	    }
@@ -211,42 +257,42 @@ struct ActorCriticImpl : public torch::nn::Module
     }
 
 	// Normal is making synchronization so we need to presample it - https://pytorch.org/docs/stable/generated/torch.normal.html
-	void presample_normal(int count_samples, int count_players)
-    {
-	    torch::Tensor zero_mean = torch::zeros({count_samples, count_players, 2}, torch::kCUDA);
+	//void presample_normal(int count_samples, int count_players)
+ //   {
+	//    torch::Tensor zero_mean = torch::zeros({count_samples, count_players, 2}, torch::kCUDA);
 
-	    try
-	    {
-		    //static double maxi_max = 0;
-		    normal_presampled = at::normal(zero_mean, log_std_.exp().expand_as(zero_mean));
-		    /*auto maxee = abs(normal_presampled.max().item<double>());
-		    if(maxee > 10 && maxee > maxi_max)
-		    {
-			    maxi_max = maxee;
-			    std::cout << "Presample new max: " << maxi_max << std::endl;
-			    std::cout << log_std_ << std::endl;
-		    }*/
-	    }
-	    catch(const std::exception &e)
-	    {
-		    std::cout << "presample_normal error: " << e.what() << std::endl;
-		    std::cout << log_std_ << std::endl;
-	    }
-		//std::cout << 
-	    //printf("2\n");
+	//    try
+	//    {
+	//	    //static double maxi_max = 0;
+	//	    normal_presampled = at::normal(zero_mean, log_std_.exp().expand_as(zero_mean));
+	//	    /*auto maxee = abs(normal_presampled.max().item<double>());
+	//	    if(maxee > 10 && maxee > maxi_max)
+	//	    {
+	//		    maxi_max = maxee;
+	//		    std::cout << "Presample new max: " << maxi_max << std::endl;
+	//		    std::cout << log_std_ << std::endl;
+	//	    }*/
+	//    }
+	//    catch(const std::exception &e)
+	//    {
+	//	    std::cout << "presample_normal error: " << e.what() << std::endl;
+	//	    std::cout << log_std_ << std::endl;
+	//    }
+	//	//std::cout << 
+	//    //printf("2\n");
 
-	    count_presampled = count_samples;
-	    used_presamples = 0;
-    }
+	//    count_presampled = count_samples;
+	//    used_presamples = 0;
+ //   }
 
 	// Gaussian entropy
-    auto entropy_gaussian() -> torch::Tensor
+    auto entropy_gaussian(torch::Tensor log_std) -> torch::Tensor
     {
 	    // Differential entropy of normal distribution. For reference https://pytorch.org/docs/stable/_modules/torch/distributions/normal.html#Normal
-	    auto gaussian_entropy = 0.5 + 0.5 * log(2 * M_PI) + log_std_;
-	    
+	    auto gaussian_entropy = 0.5 + 0.5 * log(2 * M_PI) + log_std;
+	    //std::cout << gaussian_entropy.sizes() << std::endl;
 	    // Sum over the last dimension (angle components)
-	    return gaussian_entropy.sum(); // Shape [...]
+	    return gaussian_entropy.sum(1); // Shape [...]
     }
 
 	// Bernoulli entropy
@@ -268,7 +314,8 @@ struct ActorCriticImpl : public torch::nn::Module
 
     auto entropy(torch::Tensor action) -> torch::Tensor
     {
-	    auto angle_entropy = entropy_gaussian().expand({action.size(0)});
+	    auto log_std = action.slice(1, 7, 9); // Shape [batch_size, 1]
+	    auto angle_entropy = entropy_gaussian(log_std);
         
 		auto probs = torch::sigmoid(action.slice(1, 5, 6)); // Shape [batch_size, 1]
 		auto hook_entropy = entropy_bernoulli(probs);
@@ -320,20 +367,21 @@ struct ActorCriticImpl : public torch::nn::Module
 	    auto mu_ = torch::tanh(logits.slice(1, 0, 2));
 	    auto _action = sampled.slice(1, 0, 2);
 
+		// Bound it between lower_bound and upper_bound:
+	    double lower_bound = -4.0;
+	    double upper_bound = 0.0;
+	    auto log_std = lower_bound + (upper_bound - lower_bound) * ((torch::tanh(logits.slice(1, 7, 9)) + 1) / 2);
+
+		//auto log_std = logits.slice(1, 7, 9)/*.clamp_max(0)*/;
+
         // Logarithmic probability of taken action, given the current distribution.
-	    torch::Tensor var = (log_std_ + log_std_).exp();
-
-	    log_probs.slice(1, 0, 2) += -((_action - mu_) * (_action - mu_)) / (2 * var) - log_std_ - log(sqrt(2 * M_PI));
-
+		torch::Tensor var = (log_std + log_std).exp();
+	    log_probs.slice(1, 0, 2) += -((_action - mu_) * (_action - mu_)) / (2 * var) - log_std - log(sqrt(2 * M_PI));
 		log_probs.slice(1, 2, 3) += log_prob_categorical_batch(logits.slice(1, 2, 5), sampled.slice(1, 2, 3));
-
 		log_probs.slice(1, 3, 4) += log_prob_bernoulli_batch(logits.slice(1, 5, 6), sampled.slice(1, 3, 4));
-
 		log_probs.slice(1, 4, 5) += log_prob_bernoulli_batch(logits.slice(1, 6, 7), sampled.slice(1, 4, 5));
 
-		//std::cout << log_probs.slice(1, 0, 2) << std::endl;
-
-        return log_probs;
+        return log_probs.sum(1).reshape({(int)sampled.size(0), 1});
     }
 };
 

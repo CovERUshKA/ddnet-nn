@@ -15,6 +15,12 @@ class CNeuralNetwork : public IInterface
 	MACRO_INTERFACE("neuralnetwork", 0)
 
 	bool is_training;
+	bool load_model;
+	bool load_previous;
+
+	std::string load_folder_path;
+	std::string load_main_model_name;
+
 	int skip_tick;
 	int available_ticks_to_store;
 	int count_ticks;
@@ -40,6 +46,10 @@ class CNeuralNetwork : public IInterface
 	std::vector<ModelInputInputs> vInputInputs;
 	std::vector<ModelOutput> vOutputs;
 	std::vector<int> vTeamTickCounter;
+	// Who last touched
+	std::vector<int> vLastTouchedBall;
+	// Who controls the ball
+	std::vector<int> vBallControl;
 
 	// First is distance, second is tick
 	//std::vector<std::pair<int, int>> vBotBestDistance;
