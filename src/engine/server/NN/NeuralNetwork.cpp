@@ -375,7 +375,7 @@ void CNeuralNetwork::OnInit()
 
 	load_model = false;
 	load_previous = true;
-	load_folder_path = "train\\1740321083457";
+	load_folder_path = "train\\1767612197998";
 	load_main_model_name = "last";
 
 	bool record_initial_demo = false;
@@ -1173,19 +1173,13 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 			{
 				match_is_done = true;
 
-				if(team_with_old)
-				{
+				if (team_with_old)
 					count_episodes_with_old += 1;
-				}
 
-				if(current_old_shuffle_counter == 0 || team_with_old)
-				{
+				if (current_old_shuffle_counter == 0 || team_with_old)
 					current_old_shuffle_counter = 4;
-				}
 				else
-				{
 					current_old_shuffle_counter -= 1;
-				}
 
 				// Respawn everyone in team
 				RespawnTeam(team_id + 1);
@@ -1220,13 +1214,9 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 						&& ball_last_pos.y < volleyball_area_end.y)
 					{
 						if(ball_last_pos.x > volleyball_area_center.x && ball_pos.x < volleyball_area_center.x)
-						{
 							vBallControl[team_id] = 2;
-						}
 						else if (ball_last_pos.x < volleyball_area_center.x && ball_pos.x > volleyball_area_center.x)
-						{
 							vBallControl[team_id] = 1;
-						}
 						float ball_to_line_last_distance_normalized = ClosestDistanceToDividingLine(ball_last_pos) / sqrtf(pow(13.5f, 2) + pow(9, 2)) / 32.f;
 						float ball_to_goal_distance_normalized = (abs(ball_last_pos.y - 118.5f * 32.f) - abs(ball_pos.y - 118.5f * 32.f)) / 32.f / 20.f;
 						float distance_change_reward = (ball_to_line_last_distance_normalized - ball_to_line_distance_normalized) * ball_moving_towards_net_reward;
