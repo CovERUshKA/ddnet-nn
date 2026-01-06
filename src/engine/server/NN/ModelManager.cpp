@@ -52,14 +52,6 @@ std::shared_ptr<torch::optim::ReduceLROnPlateauScheduler> scheduler;
 std::deque<ActorCritic> old_ac;
 std::vector<int> old_bots_indexes;
 std::vector<int> input_to_model_id;
-bool graph_recorded = false;
-
-// Tested CUDA Graphs - produce numerical instability
-//std::vector<torch::Tensor> graph_input_tensors;
-//std::vector<torch::Tensor> graph_output_tensors;
-//torch::Tensor graph_main_input_tensor, graph_main_output_tensor;
-//at::cuda::CUDAGraph graph;
-//at::cuda::CUDAStream graph_stream = at::cuda::getStreamFromPool();
 
 VT states;
 VT actions;
@@ -119,9 +111,6 @@ ModelManager::ModelManager(bool is_training, std::string train_folder, size_t ba
 
 	ac_update->Initialize(n_in, n_out, h_start, std_dev);
 	ac_work->Initialize(n_in, n_out, h_start, std_dev);
-
-	//graph_main_input_tensor = torch::empty({(int)(count_bots - old_bots_indexes.size()), n_in}, torch::kCUDA);
-	//graph_main_output_tensor = torch::empty({(int)(count_bots - old_bots_indexes.size()), n_out}, torch::kCUDA);
 
 	// Global Speedups
 	// Produce nondetermenistic behavior even on the same gpu
@@ -454,27 +443,19 @@ std::vector<ModelOutput> ModelManager::Decide(
 	//printf("333\n");
 	std::vector<torch::Tensor> old_batches;
 	//printf("444\n");
-	int graph_counter = 0;
-	int graph_main_counter = 0;
 	//nvtxRangePushA("Redistributing actions");
 
 	for(size_t i = 0; i < input_inputs.size(); ++i)
 	{
 		if(!input_to_model_id.empty() && input_to_model_id[i] != -1)
 		{
-			/*if(!graph_recorded)
-				graph_input_tensors.push_back(state_gpu[i].reshape({1, n_in}));
-			else*/
 			old_states.push_back(state_gpu[i].reshape({1, n_in}));
 			old_indices.push_back(i); // Track the original index
-			graph_counter += 1;
 		}
 		else
 		{
-			//current_states[graph_main_counter].copy_(state_gpu[i].reshape({1, n_in}), true);
 			current_states.push_back(state_gpu[i].reshape({1, n_in}));
 			current_indices.push_back(i); // Track the original index
-			graph_main_counter += 1;
 		}
 	}
 	//nvtxRangePop();
@@ -516,24 +497,6 @@ std::vector<ModelOutput> ModelManager::Decide(
 
 	measure_time = std::chrono::high_resolution_clock::now();
 	torch::Tensor main_input = torch::cat(current_states, 0);
-	//std::cout << graph_main_input_tensor.sizes() << std::endl;
-
-	// Process old models
-	//cudaStreamCreate(&stream);
-	//omp_set_num_threads(4);
-	//#pragma omp parallel for
-
-	//graph_main_output_tensor.copy_(ac_work->actor_forward(graph_main_input_tensor), true);
-
-	//for(int i = 0; i < graph_input_tensors.size(); ++i)
-	//{
-	//	int model_id = input_to_model_id[old_indices[i]]; // get the model id for this input
-	//	auto av_old = old_ac[model_id]->actor_forward(graph_input_tensors[i]);
-	//	graph_output_tensors[i].copy_(av_old.reshape({n_out}), true); // store the result for this old model
-	//}
-
-	//nvtxRangePushA("Graph begin");
-
 
 	torch::Tensor av_current = ac_work->actor_forward(main_input);
 
@@ -551,7 +514,6 @@ std::vector<ModelOutput> ModelManager::Decide(
 	time_forward = std::chrono::duration<double>(now - measure_time).count() * 1000.;
 	measure_time = std::chrono::high_resolution_clock::now();
 	//nvtxRangePushA("normal_actor");
-	//std::cout << graph_main_output_tensor[0] << std::endl;
 	torch::Tensor av_current_sampled, old_current_sampled, old_current;
 	//printf("1\n");
 	if(old_batches.size())
@@ -894,22 +856,6 @@ void ModelManager::Update(double avg_reward, bool cache_model, bool &updated,
 	if(!old_ac.empty())
 	{
 		ReassignOldModels();
-		//graph_input_tensors.clear();
-		////graph_main_input_tensors.clear();
-		//graph_output_tensors.clear();
-		//for(size_t i = 0; i < old_bots_indexes.size(); i++)
-		//{
-		//	torch::Tensor empty_in = torch::empty({1, n_in}, torch::kCUDA);
-		//	graph_input_tensors.push_back(empty_in);
-		//	torch::Tensor empty_out = torch::empty({n_out}, torch::kCUDA);
-		//	graph_output_tensors.push_back(empty_out);
-		//}
-		//graph_main_input_tensor = torch::empty({(int)(count_bots - old_bots_indexes.size()), n_in}, torch::kCUDA);
-		//graph_main_output_tensor = torch::empty({(int)(count_bots - old_bots_indexes.size()), n_out}, torch::kCUDA);
-
-		// Clean up
-		//graph.reset();
-		//graph_recorded = false;
 	}
 
 	//int botes = count_bots - old_bots_indexes.size();
