@@ -1,4 +1,5 @@
 #pragma once
+#include "NNStats.h"
 
 typedef unsigned int uint;
 
@@ -130,13 +131,7 @@ struct ModelManager
 	void ErasePlayerReplays(int id);
 
 	void Update(double avg_reward, bool cache_model, bool &updated,
-		double &avg_training_loss, double &avg_actor_loss, double &avg_critic_loss,
-		double &avg_entropy,
-		double &avg_actor_grad_norm, double &avg_critic_grad_norm,
-		double &avg_actor_weight_norm, double &avg_critic_weight_norm,
-		double &avg_actor_activation_mean, double &avg_actor_activation_std,
-		double &critic_mean_absolute_error, double &critic_correlation_coefficient,
-		double &avg_angle_entropy, double &avg_hook_entropy, double &avg_hammer_entropy, double &avg_direction_entropy);
+		NNStats &stats);
 
 	bool IsOldModel(int id);
 	void ReassignOldModels();

@@ -4,6 +4,7 @@
 #include <base/vmath.h>
 // #include <fstream>
 #include "Models.h"
+#include "NNStats.h"
 #include "ProximalPolicyOptimization.h"
 // #include <iostream>
 #include <omp.h>
@@ -35,7 +36,8 @@ int64_t count_mini_batches = 1;
 int64_t max_mini_batch_size = 8000; // 4096, 8192, 16384, 32768
 int64_t ppo_epochs = 4;
 double ent_coef = 1e-2; // Entropy coefficient
-//double min_ent_coef = 2e-3;
+double min_ent_coef = 5e-3;
+double decay_factor = (1e-2 - min_ent_coef) / 300.;
 //double ent_decay_factor = 0.95;
 double clip_param = 0.2; // Default: 0.2
 float gamma = 0.99f; // Default: 0.99f Discount factor
@@ -791,13 +793,7 @@ size_t ModelManager::GetCountEpisodes()
 }
 
 void ModelManager::Update(double avg_reward, bool cache_model, bool &updated,
-	double &avg_training_loss, double &avg_actor_loss, double &avg_critic_loss,
-	double &avg_entropy, 
-	double &avg_actor_grad_norm, double &avg_critic_grad_norm,
-	double &avg_actor_weight_norm, double &avg_critic_weight_norm,
-	double &avg_actor_activation_mean, double &avg_actor_activation_std,
-	double &critic_mean_absolute_error, double &critic_correlation_coefficient,
-	double &avg_angle_entropy, double &avg_hook_entropy, double &avg_hammer_entropy, double &avg_direction_entropy)
+	NNStats& stats)
 {
 	// Update.
 	if(!ac_work->is_training())
@@ -835,13 +831,7 @@ void ModelManager::Update(double avg_reward, bool cache_model, bool &updated,
 	{
 		PPO::update(ac_update, ac_work, opt, rewards.size(), ppo_epochs,
 			mini_batch_size, count_mini_batches, ent_coef, gamma, lambda, device,
-			avg_training_loss, avg_actor_loss, avg_critic_loss,
-			avg_entropy,
-			avg_actor_grad_norm, avg_critic_grad_norm,
-			avg_actor_weight_norm, avg_critic_weight_norm,
-			avg_actor_activation_mean, avg_actor_activation_std,
-			critic_mean_absolute_error, critic_correlation_coefficient,
-			avg_angle_entropy, avg_hook_entropy, avg_hammer_entropy, avg_direction_entropy,
+			stats,
 			clip_param);
 	}
 	catch(const std::exception &e)
@@ -850,7 +840,7 @@ void ModelManager::Update(double avg_reward, bool cache_model, bool &updated,
 		exit(1);
 	}
 
-	/*ent_coef -=  (1e-2 - min_ent_coef) / 300.;
+	/*ent_coef -= decay_factor;
 	ent_coef = std::max(min_ent_coef, ent_coef);*/
 
 	if(!old_ac.empty())
