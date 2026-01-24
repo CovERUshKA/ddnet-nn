@@ -92,7 +92,7 @@ struct ActorCriticImpl : public torch::nn::Module
 	    register_module("critic_network", critic_network);
 	
 		//std::cout << log_std_ << std::endl;
-
+	    return true;
     }
 
     // Forward pass.

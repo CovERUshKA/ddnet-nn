@@ -5,7 +5,7 @@
 #include <ATen/cuda/CUDAGeneratorImpl.h>
 //#include <torch/nn/options/loss.h>
 #include <random>
-
+#include "NNStats.h"
 #include "Models.h"
 #include <Windows.h>
 #include <ctime>
@@ -35,13 +35,7 @@ public:
 		std::shared_ptr<torch::optim::Adam> &opt,
 		uint steps, uint epochs, uint mini_batch_size, uint count_mini_batches,
 		double ent_coef, float gamma, float lambda, c10::DeviceType device,
-		double &avg_training_loss, double &avg_actor_loss, double &avg_critic_loss,
-		double &avg_entropy,
-		double &avg_actor_grad_norm, double &avg_critic_grad_norm,
-		double &avg_actor_weight_norm, double &avg_critic_weight_norm,
-		double &avg_actor_activation_mean, double &avg_actor_activation_std,
-		double &critic_mean_absolute_error, double &critic_correlation_coefficient,
-		double &avg_angle_entropy, double &avg_hook_entropy, double &avg_hammer_entropy, double &avg_direction_entropy,
+		NNStats &stats,
 		double clip_param = .2) -> void;
 
     static auto save_replay(torch::Tensor &state,
@@ -752,13 +746,7 @@ auto PPO::update(ActorCritic &ac, ActorCritic &ac_work,
 	std::shared_ptr<torch::optim::Adam> &opt,
 	uint steps, uint epochs, uint mini_batch_size, uint count_mini_batches,
 	double ent_coef, float gamma, float lambda, c10::DeviceType device,
-	double &avg_training_loss, double &avg_actor_loss, double &avg_critic_loss,
-	double &avg_entropy,
-	double &avg_actor_grad_norm, double &avg_critic_grad_norm,
-	double &avg_actor_weight_norm, double &avg_critic_weight_norm,
-	double &avg_actor_activation_mean, double &avg_actor_activation_std,
-	double &critic_mean_absolute_error, double &critic_correlation_coefficient,
-	double &avg_angle_entropy, double &avg_hook_entropy, double &avg_hammer_entropy, double &avg_direction_entropy,
+	NNStats& stats,
 	double clip_param) -> void
 {
 	torch::Tensor total_loss_tensor = torch::zeros({}, torch::kCUDA); // Initialize tensor to accumulate loss
@@ -780,6 +768,18 @@ auto PPO::update(ActorCritic &ac, ActorCritic &ac_work,
 	torch::Tensor total_critic_weight_norm = torch::zeros({}, torch::kCUDA);
 	torch::Tensor total_actor_activation_mean = torch::zeros({}, torch::kCUDA);
 	torch::Tensor total_actor_activation_std = torch::zeros({}, torch::kCUDA);
+
+	torch::Tensor min_entropy_tensor = torch::zeros({}, torch::kCUDA); // Initialize tensor to accumulate entropy
+	torch::Tensor min_angle_entropy_tensor = torch::zeros({}, torch::kCUDA); // Initialize tensor to accumulate angle entropy
+	torch::Tensor min_hook_entropy_tensor = torch::zeros({}, torch::kCUDA); // Initialize tensor to accumulate hook entropy
+	torch::Tensor min_hammer_entropy_tensor = torch::zeros({}, torch::kCUDA); // Initialize tensor to accumulate hammer entropy
+	torch::Tensor min_direction_entropy_tensor = torch::zeros({}, torch::kCUDA); // Initialize tensor to accumulate direction entropy
+
+	torch::Tensor max_entropy_tensor = torch::zeros({}, torch::kCUDA); // Initialize tensor to accumulate entropy
+	torch::Tensor max_angle_entropy_tensor = torch::zeros({}, torch::kCUDA); // Initialize tensor to accumulate angle entropy
+	torch::Tensor max_hook_entropy_tensor = torch::zeros({}, torch::kCUDA); // Initialize tensor to accumulate hook entropy
+	torch::Tensor max_hammer_entropy_tensor = torch::zeros({}, torch::kCUDA); // Initialize tensor to accumulate hammer entropy
+	torch::Tensor max_direction_entropy_tensor = torch::zeros({}, torch::kCUDA); // Initialize tensor to accumulate direction entropy
 
 	auto saved_size = replay_buffer->size();
 	size_t count_updates = 0;
@@ -813,8 +813,8 @@ auto PPO::update(ActorCritic &ac, ActorCritic &ac_work,
 			replay_buffer->upload_values_and_returns(cpy_values, returns);
 		}
 		//printf(" done!\n");
-		critic_mean_absolute_error = replay_buffer->get_mae();
-		critic_correlation_coefficient = replay_buffer->get_correlation_coefficient();
+		stats.critic_mean_absolute_error = replay_buffer->get_mae();
+		stats.critic_correlation_coefficient = replay_buffer->get_correlation_coefficient();
 		
 		for(size_t i = 0; i < epochs; i++)
 		{
@@ -879,7 +879,8 @@ auto PPO::update(ActorCritic &ac, ActorCritic &ac_work,
 				//median_entropy_tensor = angle_entropy.median();
 				//mode_entropy_tensor = angle_entropy.mode(0);
 
-				torch::Tensor entropy = (angle_entropy * 0.625 + hook_entropy + hammer_entropy + direction_entropy).mean();
+				torch::Tensor _entropy = angle_entropy * 0.625 + hook_entropy + hammer_entropy + direction_entropy;
+				torch::Tensor entropy = _entropy.mean();
 
 				//printf("calculated\n");
 
@@ -1095,6 +1096,18 @@ auto PPO::update(ActorCritic &ac, ActorCritic &ac_work,
 				total_hammer_entropy_tensor += hammer_entropy.detach().mean();
 				total_direction_entropy_tensor += direction_entropy.detach().mean();
 
+				min_entropy_tensor += _entropy.detach().min();
+				min_angle_entropy_tensor += angle_entropy.detach().min();
+				min_hook_entropy_tensor += hook_entropy.detach().min();
+				min_hammer_entropy_tensor += hammer_entropy.detach().min();
+				min_direction_entropy_tensor += direction_entropy.detach().min();
+
+				max_entropy_tensor += _entropy.detach().max();
+				max_angle_entropy_tensor += angle_entropy.detach().max();
+				max_hook_entropy_tensor += hook_entropy.detach().max();
+				max_hammer_entropy_tensor += hammer_entropy.detach().max();
+				max_direction_entropy_tensor += direction_entropy.detach().max();
+
 				count_updates += 1;
 				//c10::cuda::CUDACachingAllocator::emptyCache();
 
@@ -1107,22 +1120,34 @@ auto PPO::update(ActorCritic &ac, ActorCritic &ac_work,
 	//auto decide_time = std::chrono::high_resolution_clock::now();
 	replay_buffer->clear();
 
-	avg_training_loss = total_loss_tensor.item<double>() / count_updates;
-	avg_actor_loss = total_actor_loss_tensor.item<double>() / count_updates;
-	avg_critic_loss = total_critic_loss_tensor.item<double>() / count_updates;
-	avg_entropy = total_entropy_tensor.item<double>() / count_updates;
+	stats.avg_training_loss = total_loss_tensor.item<double>() / count_updates;
+	stats.avg_actor_loss = total_actor_loss_tensor.item<double>() / count_updates;
+	stats.avg_critic_loss = total_critic_loss_tensor.item<double>() / count_updates;
+	stats.avg_entropy = total_entropy_tensor.item<double>() / count_updates;
 
-	avg_actor_grad_norm = total_actor_grad_norm.item<double>() / count_updates;
-	avg_critic_grad_norm = total_critic_grad_norm.item<double>() / count_updates;
-	avg_actor_weight_norm = total_actor_weight_norm.item<double>() / count_updates;
-	avg_critic_weight_norm = total_critic_weight_norm.item<double>() / count_updates;
-	avg_actor_activation_mean = total_actor_activation_mean.item<double>() / count_updates;
-	avg_actor_activation_std = total_actor_activation_std.item<double>() / count_updates;
+	stats.avg_actor_grad_norm = total_actor_grad_norm.item<double>() / count_updates;
+	stats.avg_critic_grad_norm = total_critic_grad_norm.item<double>() / count_updates;
+	stats.avg_actor_weight_norm = total_actor_weight_norm.item<double>() / count_updates;
+	stats.avg_critic_weight_norm = total_critic_weight_norm.item<double>() / count_updates;
+	stats.avg_actor_activation_mean = total_actor_activation_mean.item<double>() / count_updates;
+	stats.avg_actor_activation_std = total_actor_activation_std.item<double>() / count_updates;
 
-	avg_angle_entropy = total_angle_entropy_tensor.item<double>() / count_updates;
-	avg_hook_entropy = total_hook_entropy_tensor.item<double>() / count_updates;
-	avg_hammer_entropy = total_hammer_entropy_tensor.item<double>() / count_updates;
-	avg_direction_entropy = total_direction_entropy_tensor.item<double>() / count_updates;
+	stats.avg_angle_entropy = total_angle_entropy_tensor.item<double>() / count_updates;
+	stats.avg_hook_entropy = total_hook_entropy_tensor.item<double>() / count_updates;
+	stats.avg_hammer_entropy = total_hammer_entropy_tensor.item<double>() / count_updates;
+	stats.avg_direction_entropy = total_direction_entropy_tensor.item<double>() / count_updates;
+
+	stats.min_entropy = min_entropy_tensor.item<double>() / count_updates;
+	stats.min_angle_entropy = min_angle_entropy_tensor.item<double>() / count_updates;
+	stats.min_hook_entropy = min_hook_entropy_tensor.item<double>() / count_updates;
+	stats.min_hammer_entropy = min_hammer_entropy_tensor.item<double>() / count_updates;
+	stats.min_direction_entropy = min_direction_entropy_tensor.item<double>() / count_updates;
+
+	stats.max_entropy = max_entropy_tensor.item<double>() / count_updates;
+	stats.max_angle_entropy = max_angle_entropy_tensor.item<double>() / count_updates;
+	stats.max_hook_entropy = max_hook_entropy_tensor.item<double>() / count_updates;
+	stats.max_hammer_entropy = max_hammer_entropy_tensor.item<double>() / count_updates;
+	stats.max_direction_entropy = max_direction_entropy_tensor.item<double>() / count_updates;
 
 	//std::cout << "Max entropy: " << max_entropy_tensor << std::endl;
 	//std::cout << "Median entropy: " << median_entropy_tensor << std::endl;

@@ -26,6 +26,8 @@
 //#include <iostream>
 #include <filesystem>
 
+#include "NNStats.h"
+
 namespace fs = std::filesystem;
 
 using namespace std;
@@ -271,6 +273,7 @@ void CNeuralNetwork::RespawnTeam(int Team)
 
 	vBots[ball_id]->GetCharacter()->SetDeepFrozen(true);
 	vTeamTickCounter[Team - 1] = 0;
+	vLastTouchedBall[Team - 1] = -1;
 }
 
 void CNeuralNetwork::StartFight(CPlayer* player, bool right_side)
@@ -375,7 +378,7 @@ void CNeuralNetwork::OnInit()
 
 	load_model = false;
 	load_previous = true;
-	load_folder_path = "train\\1740321083457";
+	load_folder_path = "train\\1769268227386";
 	load_main_model_name = "last";
 
 	bool record_initial_demo = false;
@@ -424,8 +427,8 @@ void CNeuralNetwork::OnInit()
 		dbg_msg("neuralnetwork", "Adding bots...");
 		if(count_teams)
 		{
-			//vBotLastPos.resize(count_player_bots);
-			//vBotLastVel.resize(count_player_bots);
+			// vBotLastPos.resize(count_player_bots);
+			// vBotLastVel.resize(count_player_bots);
 			vBallLastPos.resize(count_teams);
 			vInputInputs.resize(count_player_bots);
 			// vInputBlocks.resize(count_bots);
@@ -438,7 +441,7 @@ void CNeuralNetwork::OnInit()
 			// vBotsSpawnPos.resize(count_bots);
 			// vBotsValidateSpawnPoint.resize(count_bots);
 			// vBotsLastCheckPoint.resize(count_bots);
-			//vBotsCumulativeRewards.resize(count_player_bots);
+			// vBotsCumulativeRewards.resize(count_player_bots);
 			// vBotBestDistance.resize(count_player_bots);
 
 			for(size_t i = 0; i < count_bots; i++)
@@ -549,7 +552,18 @@ void CNeuralNetwork::OnInit()
 					"Time forward",
 					"Time normal",
 					"Time to cpu",
-					"Time process last"};
+					"Time process last",
+					"Minimal Entropy",
+					"Minimal Angle entropy",
+					"Minimal Hook entropy",
+					"Minimal Hammer entropy",
+					"Minimal Direction entropy",
+					"Maximal Entropy",
+					"Maximal Angle entropy",
+					"Maximal Hook entropy",
+					"Maximal Hammer entropy",
+					"Maximal Direction entropy",
+				};
 
 				// Write the CSV header
 				for(size_t i = 0; i < header_columns.size(); ++i)
@@ -998,6 +1012,7 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 
 	static float being_in_freeze_reward = -0.2f; // -0.1f if the bot is currently freezed it penalizes you on that reward
 	static float bot_is_grabbed_reward = 0.05f; // If the bot is currently grabbed to wall/ball applies to every tick
+	static float bot_hooked_ball_reward = 1.f; // If the bot regained control of the ball. Applied on the first tick when ball is hooked by the bot
 	static float bot_is_holding_ball_reward = 0.1f; // If the bot is currently holding ball using hook it rewards every tick
 	static float bot_moving_towards_ball_reward = 0.1f; // Not implemented
 	static float bot_hitted_ball_reward = 0.5f; // Rewards bot for hitting ball
@@ -1056,15 +1071,16 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 
 			if(teleport_num == 1 || teleport_num == 2)
 			{
+				vLastTouchedBall[team_id] = -1;
 				//reward += teleport_num == 1 ? -goal_reward : goal_reward;
 				//std::cout << teleport_num << std::endl;
 				if (teleport_num == 1)
 				{
 					first_bot_reward += goal_penalize_reward;
-					if(vBallControl[team_id] == 2)
-					{
-						second_bot_reward += goal_reward;
-					}
+					/*if(vBallControl[team_id] == 2)
+					{*/
+					second_bot_reward += goal_reward;
+					//}
 					vBallControl[team_id] = 1;
 					second_bot_cumulative_score += 1;
 					if(team_with_old)
@@ -1077,10 +1093,10 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 				}
 				else
 				{
-					if(vBallControl[team_id] == 1)
-					{
-						first_bot_reward += goal_reward;
-					}
+					/*if(vBallControl[team_id] == 1)
+					{*/
+					first_bot_reward += goal_reward;
+					//}
 					second_bot_reward += goal_penalize_reward;
 					vBallControl[team_id] = 2;
 					first_bot_cumulative_score += 1;
@@ -1123,7 +1139,7 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 				second_bot_reward += bot_hook_missed_reward;
 			}
 
-			// Handle ball hit
+			// Handle ball hit for the first bot
 			if(first_bot_character->m_HittedBall)
 			{
 				first_bot_character->m_HittedBall = false;
@@ -1138,7 +1154,7 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 				first_bot_reward += bot_hammer_missed_reward;
 			}
 
-			// Handle ball hit
+			// Handle ball hit for the second bot
 			if(second_bot_character->m_HittedBall)
 			{
 				second_bot_character->m_HittedBall = false;
@@ -1156,12 +1172,20 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 			if (first_bot_character->GetCore().m_HookedPlayer && first_bot_character->GetCore().m_HookedPlayer % 3 == 2)
 			{
 				first_bot_reward += bot_is_holding_ball_reward;
+				if(vLastTouchedBall[team_id] != 1 && !(second_bot_character->GetCore().m_HookedPlayer % 3 == 2))
+				{
+					first_bot_reward += bot_hooked_ball_reward;
+				}
 				vLastTouchedBall[team_id] = 1;
 			}
 
 			if (second_bot_character->GetCore().m_HookedPlayer && second_bot_character->GetCore().m_HookedPlayer % 3 == 2)
 			{
 				second_bot_reward += bot_is_holding_ball_reward;
+				if(vLastTouchedBall[team_id] != 2 && !(first_bot_character->GetCore().m_HookedPlayer % 3 == 2))
+				{
+					second_bot_reward += bot_hooked_ball_reward;
+				}
 				vLastTouchedBall[team_id] = 2;
 			}
 
@@ -1173,19 +1197,13 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 			{
 				match_is_done = true;
 
-				if(team_with_old)
-				{
+				if (team_with_old)
 					count_episodes_with_old += 1;
-				}
 
-				if(current_old_shuffle_counter == 0 || team_with_old)
-				{
+				if (current_old_shuffle_counter == 0 || team_with_old)
 					current_old_shuffle_counter = 4;
-				}
 				else
-				{
 					current_old_shuffle_counter -= 1;
-				}
 
 				// Respawn everyone in team
 				RespawnTeam(team_id + 1);
@@ -1194,13 +1212,13 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 			{
 				if(ball_pos.x > volleyball_area_start.x && ball_pos.y > volleyball_area_start.y && ball_pos.x < volleyball_area_end.x && ball_pos.y < volleyball_area_end.y)
 				{
-					if(ball_character->Core()->m_Vel.y < -2)
+					/*if(ball_character->Core()->m_Vel.y < -2)
 					{
 						if(vLastTouchedBall[team_id] == 1)
 							vBallControl[team_id] = 1;
 						else if(vLastTouchedBall[team_id] == 2)
 							vBallControl[team_id] = 2;
-					}
+					}*/
 
 					cumulative_ball_speed_x += ball_character->Core()->m_Vel.x;
 					cumulative_ball_abs_speed += length(ball_character->Core()->m_Vel);
@@ -1219,14 +1237,10 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 						&& ball_last_pos.x < volleyball_area_end.x \
 						&& ball_last_pos.y < volleyball_area_end.y)
 					{
-						if(ball_last_pos.x > volleyball_area_center.x && ball_pos.x < volleyball_area_center.x)
-						{
+						/*if(ball_last_pos.x > volleyball_area_center.x && ball_pos.x < volleyball_area_center.x)
 							vBallControl[team_id] = 2;
-						}
 						else if (ball_last_pos.x < volleyball_area_center.x && ball_pos.x > volleyball_area_center.x)
-						{
-							vBallControl[team_id] = 1;
-						}
+							vBallControl[team_id] = 1;*/
 						float ball_to_line_last_distance_normalized = ClosestDistanceToDividingLine(ball_last_pos) / sqrtf(pow(13.5f, 2) + pow(9, 2)) / 32.f;
 						float ball_to_goal_distance_normalized = (abs(ball_last_pos.y - 118.5f * 32.f) - abs(ball_pos.y - 118.5f * 32.f)) / 32.f / 20.f;
 						float distance_change_reward = (ball_to_line_last_distance_normalized - ball_to_line_distance_normalized) * ball_moving_towards_net_reward;
@@ -1322,15 +1336,7 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 			}
 		
 			// int64_t update_time = time_get_impl();
-			double avg_training_loss = 0;
-			double avg_actor_loss = 0;
-			double avg_critic_loss = 0;
-			double avg_entropy = 0;
-			double avg_actor_grad_norm = 0, avg_critic_grad_norm = 0,
-			avg_actor_weight_norm = 0, avg_critic_weight_norm = 0,
-			avg_actor_activation_mean = 0, avg_actor_activation_std = 0,
-			       critic_mean_absolute_error = 0, critic_correlation_coefficient = 0,
-			       avg_angle_entropy = 0, avg_hook_entropy = 0, avg_hammer_entropy = 0, avg_direction_entropy = 0;
+			NNStats stats;
 			bool updated = false;
 			size_t count_episodes = model_manager->GetCountEpisodes();
 
@@ -1342,12 +1348,7 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 			static size_t count_every_update = 0;
 			bool cache_model = count_updated % cache_model_gap == 0 && model_manager->IsTraining();
 			model_manager->Update(avg_ball_hits, cache_model, updated,
-				avg_training_loss, avg_actor_loss, avg_critic_loss,
-				avg_entropy,
-				avg_actor_grad_norm, avg_critic_grad_norm,
-				avg_actor_weight_norm, avg_critic_weight_norm,
-				avg_actor_activation_mean, avg_actor_activation_std, critic_mean_absolute_error, critic_correlation_coefficient,
-				avg_angle_entropy, avg_hook_entropy, avg_hammer_entropy, avg_direction_entropy);
+				stats);
 			count_episodes_processed += count_episodes;
 			count_every_update += 1;
 			auto update_tick_delta = m_pServer->Tick() - last_update_tick;
@@ -1400,23 +1401,23 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 				       << "," << avg_second_bot_reward
 				       << "," << highest_reward_per_tick
 				       << "," << ticks_per_second
-				       << "," << avg_training_loss
-				       << "," << avg_actor_loss
-				       << "," << avg_critic_loss
-				       << "," << critic_mean_absolute_error
-				       << "," << critic_correlation_coefficient
-				       << "," << avg_entropy
-				       << "," << avg_angle_entropy
-				       << "," << avg_hook_entropy
-				       << "," << avg_hammer_entropy
-				       << "," << avg_direction_entropy
+				       << "," << stats.avg_training_loss
+				       << "," << stats.avg_actor_loss
+				       << "," << stats.avg_critic_loss
+				       << "," << stats.critic_mean_absolute_error
+				       << "," << stats.critic_correlation_coefficient
+				       << "," << stats.avg_entropy
+				       << "," << stats.avg_angle_entropy
+				       << "," << stats.avg_hook_entropy
+				       << "," << stats.avg_hammer_entropy
+				       << "," << stats.avg_direction_entropy
 				       << "," << model_manager->GetEntropyCoefficient()
-				       << "," << avg_actor_grad_norm
-				       << "," << avg_critic_grad_norm
-				       << "," << avg_actor_weight_norm
-				       << "," << avg_critic_weight_norm
-				       << "," << avg_actor_activation_mean
-				       << "," << avg_actor_activation_std
+				       << "," << stats.avg_actor_grad_norm
+				       << "," << stats.avg_critic_grad_norm
+				       << "," << stats.avg_actor_weight_norm
+				       << "," << stats.avg_critic_weight_norm
+				       << "," << stats.avg_actor_activation_mean
+				       << "," << stats.avg_actor_activation_std
 				       << "," << model_manager->GetCurrentLearningRate()
 				       << "," << (float)time_get_impl() / (float)time_freq()
 				       << "," << (cumulative_time_to_decide / (float)update_tick_delta)
@@ -1427,6 +1428,18 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 				       << "," << cumulative_time_normal / (float)update_tick_delta
 				       << "," << cumulative_time_to_cpu / (float)update_tick_delta
 				       << "," << cumulative_time_process_last / (float)update_tick_delta
+				       // Print minimal entropies
+				       << "," << stats.min_entropy
+				       << "," << stats.min_angle_entropy
+				       << "," << stats.min_hook_entropy
+				       << "," << stats.min_hammer_entropy
+				       << "," << stats.min_direction_entropy
+				       // Print maximum entropies
+				       << "," << stats.max_entropy
+				       << "," << stats.max_angle_entropy
+				       << "," << stats.max_hook_entropy
+				       << "," << stats.max_hammer_entropy
+				       << "," << stats.max_direction_entropy
 				       << endl;
 				dbg_msg("neuralnetwork",\
 					"Avg. first/second bot score: %f/%f "\
@@ -1447,8 +1460,8 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 					avg_first_bot_reward, avg_second_bot_reward, \
 					avg_ball_hits, cumulative_ball_hits, \
 					ticks_per_second, \
-					avg_training_loss, avg_actor_loss, avg_critic_loss, \
-					avg_entropy, \
+					stats.avg_training_loss, stats.avg_actor_loss, stats.avg_critic_loss, \
+					stats.avg_entropy, \
 					count_episodes, count_episodes_processed, \
 					count_every_update);
 					
