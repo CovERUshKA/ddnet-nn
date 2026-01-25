@@ -422,7 +422,7 @@ void CNeuralNetwork::OnInit()
 			dbg_msg("neuralnetwork", "Can't make demos directory");
 			exit(1);
 		}
-		dbg_msg("neuralnetwork", "Train directory with folders created.");
+		dbg_msg("neuralnetwork", "Train directory with folders created: %s.", ("train\\" + dir_name).c_str());
 
 		dbg_msg("neuralnetwork", "Adding bots...");
 		if(count_teams)
