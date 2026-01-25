@@ -851,16 +851,7 @@ auto PPO::update(ActorCritic &ac, ActorCritic &ac_work,
 				//torch::Tensor entropy = ac->entropy(action).mean();
 				//std::cout << action.slice(0, 0, 10) << std::endl;
 
-				// Bound it between lower_bound and upper_bound:
-				double lower_bound = -4.0;
-				double upper_bound = 0.0;
-				auto log_std = lower_bound + (upper_bound - lower_bound) * ((torch::tanh(action.slice(1, 7, 9)) + 1) / 2);
-				//auto log_std = action.slice(1, 7, 9);
-				//std::cout << log_std.sizes() << std::endl;
-				//auto log_std_penalty = torch::relu(action.slice(1, 7, 9) - 2);
-				//auto log_std = action.slice(1, 7, 9)/*.clamp_max(0)*/;
-
-				auto angle_entropy = ac->entropy_gaussian(log_std) / (1.42 * 2); // 1.42 * 2
+				auto angle_entropy = ac->entropy_gaussian() / (1.42 * 2); // 1.42 * 2
 				//std::cout << angle_entropy.sizes() << std::endl;
 
 

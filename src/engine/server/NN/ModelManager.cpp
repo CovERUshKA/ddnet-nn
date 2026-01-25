@@ -365,7 +365,6 @@ process_main_network(torch::Tensor av_current, bool validating = false)
 	torch::Tensor dir_logits = av_current.slice(1, 2, 5);
 	torch::Tensor hook_logits = av_current.slice(1, 5, 6);
 	torch::Tensor hammer_logits = av_current.slice(1, 6, 7);
-	torch::Tensor log_std_logits = av_current.slice(1, 7, 9);
 
 	auto angles = torch::tanh(angle_logits);
 	//printf("keke\n");
@@ -381,13 +380,7 @@ process_main_network(torch::Tensor av_current, bool validating = false)
 
 	if(ac_work->is_training() && !validating)
 	{
-		// Bound it between lower_bound and upper_bound:
-		double lower_bound = -4.0;
-		double upper_bound = 0.0;
-		auto log_std = lower_bound + (upper_bound - lower_bound) * ((torch::tanh(log_std_logits) + 1) / 2);
-		//auto log_std = log_std_logits/*.clamp_max(0)*/;
-
-		angles = ac_work->fast_normal(angles, log_std);
+		angles = ac_work->fast_normal(angles, ac_work->log_std_);
 		//std::cout << angles << std::endl;
 		hooks = sample_bernoulli_batch(hooks);
 		hammers = sample_bernoulli_batch(hammers);
