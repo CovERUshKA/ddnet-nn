@@ -234,7 +234,7 @@ struct ActorCriticImpl : public torch::nn::Module
 	    auto gaussian_entropy = 0.5 + 0.5 * log(2 * M_PI) + log_std_;
 	    //std::cout << gaussian_entropy.sizes() << std::endl;
 	    // Sum over the last dimension (angle components)
-	    return gaussian_entropy.sum(1); // Shape [...]
+	    return gaussian_entropy.sum(); // Shape [...]
     }
 
 	// Bernoulli entropy

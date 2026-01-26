@@ -26,7 +26,7 @@ int64_t h_start = 1024; // 1024 256
 double std_dev = 0.37; // log(0.37) ~ -1
 double learning_rate = 5e-5;
 double actor_learning_rate = 3e-4;
-//double log_std_learning_rate = 1e-4;
+double log_std_learning_rate = 1e-4;
 double critic_learning_rate = 1e-3;
 //double weight_decay = 0.0001;
 
@@ -158,8 +158,8 @@ ModelManager::ModelManager(bool is_training, std::string train_folder, size_t ba
 							std::make_unique<torch::optim::AdamOptions>(actor_learning_rate)));
 	param_groups.push_back(torch::optim::OptimizerParamGroup({ac_update->critic_network->parameters()},
 							std::make_unique<torch::optim::AdamOptions>(critic_learning_rate)));
-	//param_groups.push_back(torch::optim::OptimizerParamGroup({ac_update->log_std_},
-		//std::make_unique<torch::optim::AdamOptions>(log_std_learning_rate)));
+	param_groups.push_back(torch::optim::OptimizerParamGroup({ac_update->log_std_},
+			std::make_unique<torch::optim::AdamOptions>(log_std_learning_rate)));
 
 	opt = std::make_shared<torch::optim::Adam>(param_groups);
 
