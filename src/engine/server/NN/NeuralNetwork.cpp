@@ -378,7 +378,7 @@ void CNeuralNetwork::OnInit()
 
 	load_model = false;
 	load_previous = true;
-	load_folder_path = "train\\1769268227386";
+	load_folder_path = "train\\1769318571446";
 	load_main_model_name = "last";
 
 	bool record_initial_demo = false;
@@ -422,7 +422,7 @@ void CNeuralNetwork::OnInit()
 			dbg_msg("neuralnetwork", "Can't make demos directory");
 			exit(1);
 		}
-		dbg_msg("neuralnetwork", "Train directory with folders created.");
+		dbg_msg("neuralnetwork", "Train directory with folders created: %s.", ("train\\" + dir_name).c_str());
 
 		dbg_msg("neuralnetwork", "Adding bots...");
 		if(count_teams)
@@ -563,6 +563,8 @@ void CNeuralNetwork::OnInit()
 					"Maximal Hook entropy",
 					"Maximal Hammer entropy",
 					"Maximal Direction entropy",
+					"Count ticks with current",
+					"Count ticks with old",
 				};
 
 				// Write the CSV header
@@ -981,6 +983,10 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 	static float first_bot_cumulative_reward = 0;
 	static float second_bot_cumulative_reward = 0;
 
+	// Collect ticks with current/old models for statistics
+	static float count_ticks_with_current = 0;
+	static float count_ticks_with_old = 0;
+
 	// Score goaled
 	static float first_bot_cumulative_score = 0;
 	static float second_bot_cumulative_score = 0;
@@ -1025,7 +1031,7 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 	static float step_reward = -0.02f; // -0.001f Applies every tick
 	static float divide_reward_by = 10.f;
 
-	static int force_stop_tick = 2000; // 2000 INT_MAX
+	static int force_stop_tick = 2000; // 2000 20 minutes to play. If more than this - force stop.
 
 	static int current_old_shuffle_counter = 0; // Save 1 old per 4 current
 
@@ -1172,21 +1178,27 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 			if (first_bot_character->GetCore().m_HookedPlayer && first_bot_character->GetCore().m_HookedPlayer % 3 == 2)
 			{
 				first_bot_reward += bot_is_holding_ball_reward;
-				if(vLastTouchedBall[team_id] != 1 && !(second_bot_character->GetCore().m_HookedPlayer % 3 == 2))
+				if(!(second_bot_character->GetCore().m_HookedPlayer % 3 == 2))
 				{
-					first_bot_reward += bot_hooked_ball_reward;
+					if(vLastTouchedBall[team_id] != 1)
+					{
+						first_bot_reward += bot_hooked_ball_reward;
+					}
+					vLastTouchedBall[team_id] = 1;
 				}
-				vLastTouchedBall[team_id] = 1;
 			}
 
 			if (second_bot_character->GetCore().m_HookedPlayer && second_bot_character->GetCore().m_HookedPlayer % 3 == 2)
 			{
 				second_bot_reward += bot_is_holding_ball_reward;
-				if(vLastTouchedBall[team_id] != 2 && !(first_bot_character->GetCore().m_HookedPlayer % 3 == 2))
+				if(!(first_bot_character->GetCore().m_HookedPlayer % 3 == 2))
 				{
-					second_bot_reward += bot_hooked_ball_reward;
+					if(vLastTouchedBall[team_id] != 2)
+					{
+						second_bot_reward += bot_hooked_ball_reward;
+					}
+					vLastTouchedBall[team_id] = 2;
 				}
-				vLastTouchedBall[team_id] = 2;
 			}
 
 			first_bot_reward += first_bot_character->m_FreezeTime ? being_in_freeze_reward : 0;
@@ -1198,7 +1210,14 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 				match_is_done = true;
 
 				if (team_with_old)
+				{
 					count_episodes_with_old += 1;
+					count_ticks_with_old += vTeamTickCounter[team_id];
+				}
+				else
+				{
+					count_ticks_with_current += vTeamTickCounter[team_id];
+				}
 
 				if (current_old_shuffle_counter == 0 || team_with_old)
 					current_old_shuffle_counter = 4;
@@ -1440,6 +1459,9 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 				       << "," << stats.max_hook_entropy
 				       << "," << stats.max_hammer_entropy
 				       << "," << stats.max_direction_entropy
+						// Print count ticks with new/old
+				       << "," << count_ticks_with_current
+				       << "," << count_ticks_with_old
 				       << endl;
 				dbg_msg("neuralnetwork",\
 					"Avg. first/second bot score: %f/%f "\
@@ -1490,6 +1512,8 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 				= current_bot_cumulative_score \
 				= old_bot_cumulative_score \
 				= count_episodes_with_old \
+				= count_ticks_with_current \
+				= count_ticks_with_old \
 				= count_every_update = 0;
 			}
 			respawn_all = true;

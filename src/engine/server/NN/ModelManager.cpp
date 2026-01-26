@@ -843,13 +843,7 @@ size_t ModelManager::GetCountEpisodes()
 }
 
 void ModelManager::Update(double avg_reward, bool cache_model, bool &updated,
-	double &avg_training_loss, double &avg_actor_loss, double &avg_critic_loss,
-	double &avg_entropy, 
-	double &avg_actor_grad_norm, double &avg_critic_grad_norm,
-	double &avg_actor_weight_norm, double &avg_critic_weight_norm,
-	double &avg_actor_activation_mean, double &avg_actor_activation_std,
-	double &critic_mean_absolute_error, double &critic_correlation_coefficient,
-	double &avg_angle_entropy, double &avg_hook_entropy, double &avg_hammer_entropy, double &avg_direction_entropy)
+	NNStats& stats)
 {
 	// Update.
 	if(!ac_work->is_training())
@@ -887,13 +881,7 @@ void ModelManager::Update(double avg_reward, bool cache_model, bool &updated,
 	{
 		PPO::update(ac_update, ac_work, opt, rewards.size(), ppo_epochs,
 			mini_batch_size, count_mini_batches, ent_coef, gamma, lambda, device,
-			avg_training_loss, avg_actor_loss, avg_critic_loss,
-			avg_entropy,
-			avg_actor_grad_norm, avg_critic_grad_norm,
-			avg_actor_weight_norm, avg_critic_weight_norm,
-			avg_actor_activation_mean, avg_actor_activation_std,
-			critic_mean_absolute_error, critic_correlation_coefficient,
-			avg_angle_entropy, avg_hook_entropy, avg_hammer_entropy, avg_direction_entropy,
+			stats,
 			clip_param);
 	}
 	catch(const std::exception &e)
