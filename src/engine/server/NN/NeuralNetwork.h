@@ -62,6 +62,7 @@ class CNeuralNetwork : public IInterface
 	std::ofstream logger;
 
 	std::chrono::high_resolution_clock::time_point decide_time;
+	float cumulative_time_to_update;
 	float cumulative_time_to_decide;
 	float cumulative_time_to_tick;
 	float cumulative_time_rest;

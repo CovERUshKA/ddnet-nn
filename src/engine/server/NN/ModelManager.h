@@ -152,4 +152,8 @@ struct ModelManager
 	size_t GetCountEpisodes();
 	// Return entropy coefficient
 	double GetEntropyCoefficient();
+	// Reset bot memory
+	bool ResetBotMemory(int bot_id);
+	// Reset memory of all bots
+	bool ResetAllBotsMemory();
 };

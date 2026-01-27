@@ -29,7 +29,7 @@ class PPO
 {
 public:
     //static auto returns(VT& rewards, VT& dones, VT& vals, double gamma, double lambda) -> VT; // Generalized advantage estimate, https://arxiv.org/abs/1506.02438
-	static auto Initilize(size_t batch_size, size_t count_players) -> void;
+	static auto Initilize(size_t batch_size, size_t count_players, int n_in, int lstm_layers, int h_lstm_size) -> void;
 
 	static auto update(ActorCritic &ac, ActorCritic &ac_work,
 		std::shared_ptr<torch::optim::Adam> &opt,
@@ -41,6 +41,8 @@ public:
     static auto save_replay(torch::Tensor &state,
 	    torch::Tensor &action,
 	    torch::Tensor &log_prob,
+		torch::Tensor &h_lstm_states_saved,
+		torch::Tensor &c_lstm_states_saved,
 	    std::vector<float> &reward,
 		std::vector<bool> &accumulation_reset,
 	    std::vector<bool> &done,
@@ -55,20 +57,24 @@ public:
 class ReplayBuffer
 {
 public:
-	ReplayBuffer(size_t capacity, size_t count_players) :
+	ReplayBuffer(size_t capacity, size_t count_players, int n_in, int lstm_layers, int h_lstm_size) :
 		_capacity(capacity), count_players(count_players), count_episodes(0), last_index(0), last_episode_index(0), last_values_and_returns_index(0)
 	{
 		//dones.resize(capacity);
 		//rewards.resize(capacity);
-		states = torch::empty({(long long)capacity, 40}, torch::kCUDA);
+		states = torch::empty({(long long)capacity, n_in}, torch::kCUDA);
 		actions = torch::empty({(long long)capacity, 5}, torch::kCUDA);
 		log_probs = torch::empty({(long long)capacity, 1}, torch::kCUDA);
+		h_lstm = torch::empty({lstm_layers, (long long) capacity, h_lstm_size}, torch::kCUDA);
+		c_lstm = torch::empty({lstm_layers, (long long) capacity, h_lstm_size}, torch::kCUDA);
 		values = torch::empty({(long long)capacity, 1}, torch::kCUDA);
 		returns = torch::empty({(long long)capacity, 1}, torch::kCUDA);
 		//v_all_indices.resize(capacity);
 		players_states.resize(count_players);
 		players_actions.resize(count_players);
 		players_log_probs.resize(count_players);
+		players_h_lstm.resize(count_players);
+		players_c_lstm.resize(count_players);
 		players_rewards.resize(count_players);
 		players_accumulation_resets.resize(count_players);
 		players_dones.resize(count_players);
@@ -85,7 +91,12 @@ public:
 		all_indices = torch::arange(0, capacity, torch::kCUDA);
 	}
 
-	void add(const torch::Tensor &state, const torch::Tensor &action, const torch::Tensor &log_prob, std::vector<float> &reward, std::vector<bool> &accumulation_reset, std::vector<bool> &done, std::vector<bool> &mask, bool &is_full)
+	void add(const torch::Tensor &state,
+		const torch::Tensor &action,
+		const torch::Tensor &log_prob,
+		torch::Tensor &h_lstm_states_saved,
+		torch::Tensor &c_lstm_states_saved,
+		std::vector<float> &reward, std::vector<bool> &accumulation_reset, std::vector<bool> &done, std::vector<bool> &mask, bool &is_full)
 	{
 		//torch::NoGradGuard no_grad;
 		/*if(buffer.size() == capacity)
@@ -113,6 +124,8 @@ public:
 			players_states[i].push_back(state[i]);
 			players_actions[i].push_back(action[i]);
 			players_log_probs[i].push_back(log_prob[i]); // log_prob_counter
+			players_h_lstm[i].push_back(h_lstm_states_saved[0][i]);
+			players_c_lstm[i].push_back(c_lstm_states_saved[0][i]);
 			this->players_dones[i].push_back(done[i]);
 			this->players_accumulation_resets[i].push_back(accumulation_reset[i]);
 			this->players_rewards[i].push_back(reward[i]);
@@ -146,6 +159,14 @@ public:
 					//log_probs.index({(long long)(dones.size())}).copy_(stacked, true);
 					players_log_probs[i].clear();
 					//printf("4\n");
+
+					stacked = torch::stack(players_h_lstm[i]);
+					h_lstm.index({0, torch::indexing::Slice(dones.size(), dones.size() + stacked.size(0))}).copy_(stacked, true);
+					players_h_lstm[i].clear();
+
+					stacked = torch::stack(players_c_lstm[i]);
+					c_lstm.index({0, torch::indexing::Slice(dones.size(), dones.size() + stacked.size(0))}).copy_(stacked, true);
+					players_c_lstm[i].clear();
 
 					rewards.insert(rewards.end(), players_rewards[i].begin(), players_rewards[i].end());
 					players_rewards[i].clear();
@@ -210,6 +231,8 @@ public:
 		this->players_states[id].clear();
 		this->players_actions[id].clear();
 		this->players_log_probs[id].clear();
+		this->players_h_lstm[id].clear();
+		this->players_c_lstm[id].clear();
 		this->players_dones[id].clear();
 		this->players_accumulation_resets[id].clear();
 		this->players_rewards[id].clear();
@@ -242,6 +265,8 @@ public:
 			this->players_states[i].clear();
 			this->players_actions[i].clear();
 			this->players_log_probs[i].clear();
+			this->players_h_lstm[i].clear();
+			this->players_c_lstm[i].clear();
 		    this->players_dones[i].clear();
 			this->players_accumulation_resets[i].clear();
 		    this->players_rewards[i].clear();
@@ -291,6 +316,8 @@ public:
 		torch::Tensor& states_ret,
 		torch::Tensor& actions_ret,
 		torch::Tensor& log_probs_ret,
+	    torch::Tensor& h_lstm_ret,
+	    torch::Tensor& c_lstm_ret,
 		std::vector<float>& rewards_ret,
 	    std::vector<bool> &accumulation_resets_ret,
 		std::vector<bool>& dones_ret)
@@ -298,7 +325,7 @@ public:
 		std::vector<float> rewards_concat_ret;
 		std::vector<bool> accumulation_resets_concat_ret;
 		std::vector<bool> dones_concat_ret;
-		torch::Tensor states_concatenated_ret, actions_concat_ret, log_probs_concat_ret;
+		torch::Tensor states_concatenated_ret, actions_concat_ret, log_probs_concat_ret, h_lstm_concat_ret, c_lstm_concat_ret;
 
 		size_t start = last_episode_index;
 		size_t end = start + batch_size;
@@ -339,6 +366,9 @@ public:
 		states_concatenated_ret = states.index({torch::indexing::Slice(start, end)});
 		actions_concat_ret = actions.index({torch::indexing::Slice(start, end)});
 		log_probs_concat_ret = log_probs.index({torch::indexing::Slice(start, end)});
+		h_lstm_concat_ret = h_lstm.index({0, torch::indexing::Slice(start, end)}).unsqueeze(0);
+		c_lstm_concat_ret = c_lstm.index({0, torch::indexing::Slice(start, end)}).unsqueeze(0);
+
 		// rewards_concat_ret = rewards_concat.index({torch::indexing::Slice(start, end)});
 		// dones_concat_ret = dones_concat.index({torch::indexing::Slice(start, end)});
 		// printf("ended\n");
@@ -358,6 +388,8 @@ public:
 		states_ret = states_concatenated_ret;
 		actions_ret = actions_concat_ret;
 		log_probs_ret = log_probs_concat_ret;
+		h_lstm_ret = h_lstm_concat_ret;
+		c_lstm_ret = c_lstm_concat_ret;
 		rewards_ret = rewards_concat_ret;
 		accumulation_resets_ret = accumulation_resets_concat_ret;
 		dones_ret = dones_concat_ret;
@@ -420,6 +452,8 @@ public:
 		torch::Tensor &states_ret,
 		torch::Tensor &actions_ret,
 		torch::Tensor &log_probs_ret,
+		torch::Tensor &h_lstm_ret,
+		torch::Tensor &c_lstm_ret,
 		torch::Tensor &values_ret,
 		torch::Tensor &returns_ret
 	)
@@ -469,7 +503,7 @@ public:
 		//}
 
 		//printf("1\n");
-		torch::Tensor states_concatenated_ret, actions_concat_ret, log_probs_concat_ret, values_concat_ret, returns_concat_ret;
+		torch::Tensor states_concatenated_ret, actions_concat_ret, log_probs_concat_ret, h_lstm_concat_ret, c_lstm_concat_ret, values_concat_ret, returns_concat_ret;
 
 		size_t start = last_index;
 		size_t end = start + batch_size;
@@ -514,6 +548,8 @@ public:
 		states_concatenated_ret = states.index_select(0, group_indices);
 		actions_concat_ret = actions.index_select(0, group_indices);
 		log_probs_concat_ret = log_probs.index_select(0, group_indices);
+		h_lstm_concat_ret = h_lstm.index_select(1, group_indices);
+		c_lstm_concat_ret = c_lstm.index_select(1, group_indices);
 		values_concat_ret = values.index_select(0, group_indices);
 		returns_concat_ret = returns.index_select(0, group_indices);
 
@@ -535,6 +571,8 @@ public:
 		states_ret = states_concatenated_ret;
 		actions_ret = actions_concat_ret;
 		log_probs_ret = log_probs_concat_ret;
+		h_lstm_ret = h_lstm_concat_ret;
+		c_lstm_ret = c_lstm_concat_ret;
 		values_ret = values_concat_ret;
 		returns_ret = returns_concat_ret;
 		return true;
@@ -545,7 +583,7 @@ private:
 	size_t count_episodes;
 	size_t count_players;
 	size_t _capacity;
-	torch::Tensor states, actions, log_probs, values, returns, all_indices;
+	torch::Tensor states, actions, log_probs, h_lstm, c_lstm, values, returns, all_indices;
 	//torch::Tensor states_concatenated_reshaped, actions_concat_reshaped, log_probs_concat_reshaped;
 	//std::vector<int64_t> v_all_indices;
 	std::vector<float> rewards;
@@ -553,7 +591,7 @@ private:
 	std::vector<bool> dones;
 	std::vector<std::vector<float>> players_rewards;
 	std::vector<std::vector<bool>> players_dones, players_accumulation_resets;
-	std::vector<std::vector<torch::Tensor>> players_states, players_actions, players_log_probs;
+	std::vector<std::vector<torch::Tensor>> players_states, players_actions, players_log_probs, players_h_lstm, players_c_lstm;
 
 	//std::mt19937 generator{std::random_device{}()};
 	//torch::Generator local_cuda_gen;
@@ -575,9 +613,9 @@ torch::Tensor normalize_rewards(const torch::Tensor &rewards)
 
 static ReplayBuffer* replay_buffer = nullptr;
 
-auto PPO::Initilize(size_t batch_size, size_t count_players) -> void
+auto PPO::Initilize(size_t batch_size, size_t count_players, int n_in, int lstm_layers, int h_lstm_size) -> void
 {
-	replay_buffer = new ReplayBuffer(batch_size, count_players); // (256000, 256)
+	replay_buffer = new ReplayBuffer(batch_size, count_players, n_in, lstm_layers, h_lstm_size); // (256000, 256)
 }
 
 torch::Tensor normalize_advantages(const torch::Tensor &advantages)
@@ -716,6 +754,8 @@ torch::Tensor calculate_returns(std::vector<float> &rewards, std::vector<bool> &
 auto PPO::save_replay(torch::Tensor& state,
     torch::Tensor& action,
     torch::Tensor& log_prob,
+	torch::Tensor &h_lstm_states_saved,
+	torch::Tensor &c_lstm_states_saved,
     std::vector<float> &reward,
 	std::vector<bool> &accumulation_reset,
 	std::vector<bool> &done,
@@ -723,7 +763,7 @@ auto PPO::save_replay(torch::Tensor& state,
 	bool &is_full) -> void
 {
 	//torch::NoGradGuard no_grad;
-	replay_buffer->add(state, action, log_prob, reward, accumulation_reset, done, mask, is_full);
+	replay_buffer->add(state, action, log_prob, h_lstm_states_saved, c_lstm_states_saved, reward, accumulation_reset, done, mask, is_full);
 }
 
 auto PPO::erase_player_replays(int id) -> void
@@ -799,14 +839,15 @@ auto PPO::update(ActorCritic &ac, ActorCritic &ac_work,
 		//c10::cuda::CUDACachingAllocator::emptyCache();
 
 		//opt->zero_grad();
-		torch::Tensor states, actions, log_probs;
+		torch::Tensor states, actions, log_probs, h_lstm, c_lstm;
 		std::vector<float> rewards;
 		std::vector<bool> accumulation_resets;
 		std::vector<bool> dones;
 		//printf("Calculating GAE of episodes...");
-		while(replay_buffer->next_episodes(mini_batch_size, states, actions, log_probs, rewards, accumulation_resets, dones))
-		{
-			torch::Tensor cpy_values = ac_work->critic_forward(states).detach();
+		while(replay_buffer->next_episodes(mini_batch_size, states, actions, log_probs, h_lstm, c_lstm, rewards, accumulation_resets, dones))
+		{ 
+			auto [cpy_values, h_out_values, c_out_values] = ac_work->critic_forward_sequence(states, h_lstm, c_lstm);
+			cpy_values = cpy_values.detach();
 
 			auto returns = calculate_returns(rewards, accumulation_resets, dones, cpy_values, gamma, lambda);
 
@@ -822,7 +863,7 @@ auto PPO::update(ActorCritic &ac, ActorCritic &ac_work,
 
 			torch::Tensor values;
 			torch::Tensor returns;
-			while(replay_buffer->next_sample(mini_batch_size, states, actions, log_probs, values, returns))
+			while(replay_buffer->next_sample(mini_batch_size, states, actions, log_probs, h_lstm, c_lstm, values, returns))
 			{
 				//torch::Tensor states_cpy = states;
 				//torch::Tensor log_probs_cpy = log_probs.detach();
@@ -844,7 +885,7 @@ auto PPO::update(ActorCritic &ac, ActorCritic &ac_work,
 				torch::Tensor cpy_adv = compute_advantages(ac, cpy_ret, cpy_values /*cpy_sta.view({cpy_sta.size(0), 1, 4372})*/);
 
 				// printf("UPDATING1.1\n");
-				torch::Tensor action = ac->actor_forward(cpy_sta);
+				auto [action, h_out_action, c_out_action] = ac->actor_forward_sequence(cpy_sta, h_lstm, c_lstm);
 				//printf("4\n");
 				//Sleep(3000);
 				//std::cout << action.slice(0, 0, 10) << std::endl;
@@ -855,7 +896,7 @@ auto PPO::update(ActorCritic &ac, ActorCritic &ac_work,
 				//std::cout << angle_entropy.sizes() << std::endl;
 
 
-				auto probs = action.slice(1, 5, 6); // Shape [batch_size, 1]
+				auto probs = torch::sigmoid(action.slice(1, 5, 6)); // Shape [batch_size, 1]
 				auto hook_entropy = ac->entropy_bernoulli(probs) / log(2); // log(2)
 				probs = torch::sigmoid(action.slice(1, 6, 7)); // Shape [batch_size, 1]
 				auto hammer_entropy = ac->entropy_bernoulli(probs) / log(2); // log(2)
@@ -901,7 +942,7 @@ auto PPO::update(ActorCritic &ac, ActorCritic &ac_work,
 				// printf("UPDATING1.6\n");
 				// printf("4.9\n");
 				// Sleep(7000);
-				auto val = ac->critic_forward(cpy_sta);
+				auto [val, h_out_val, c_out_val] = ac->critic_forward_sequence(cpy_sta, h_lstm, c_lstm);
 				// printf("5\n");
 				// Sleep(7000);
 				auto actor_loss = -torch::min(surr1, surr2).mean();

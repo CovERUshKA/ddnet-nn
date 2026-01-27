@@ -200,6 +200,9 @@ void CNeuralNetwork::RespawnTeam(int Team)
 {
 	int ball_id = (Team - 1) * 3 + 2;
 
+	model_manager->ResetBotMemory((Team - 1) * 2);
+	model_manager->ResetBotMemory((Team - 1) * 2 + 1);
+
 	for(size_t i = 0; i < 3; i++)
 	{
 		auto bot = vBots[(Team - 1) * 3 + i];
@@ -378,7 +381,7 @@ void CNeuralNetwork::OnInit()
 
 	load_model = false;
 	load_previous = true;
-	load_folder_path = "train\\1769318571446";
+	load_folder_path = "train\\1769534105478";
 	load_main_model_name = "last";
 
 	bool record_initial_demo = false;
@@ -386,44 +389,71 @@ void CNeuralNetwork::OnInit()
 	const CMapItemLayerTilemap *pTileMap = m_pGameContext->Layers()->GameLayer();
 	const CTile *pTiles = static_cast<CTile *>(Kernel()->RequestInterface<IMap>()->GetData(pTileMap->m_Data));
 
+	dir_name = to_string(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count());
+
 	if(is_training)
 	{
 		// printf("Creating train directory with folders...\n");
 		dbg_msg("neuralnetwork", "Creating train directory with folders...");
 
-		dir_name = to_string(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count());
-
 		if(fs_makedir("train") != 0)
 		{
 			dbg_msg("neuralnetwork", "Can't make train directory");
+			system("PAUSE");
 			exit(1);
 		}
 
 		if(fs_makedir((string("train\\") + dir_name).c_str()) != 0)
 		{
 			dbg_msg("neuralnetwork", "Can't make dir for this learning directory");
+			system("PAUSE");
 			exit(1);
 		}
 
 		if(fs_makedir(string("train\\" + dir_name + "\\models").c_str()) != 0)
 		{
 			dbg_msg("neuralnetwork", "Can't make models directory");
+			system("PAUSE");
 			exit(1);
 		}
 
 		if(fs_makedir(string("train\\" + dir_name + "\\models\\previous").c_str()) != 0)
 		{
 			dbg_msg("neuralnetwork", "Can't make previous models directory");
+			system("PAUSE");
 			exit(1);
 		}
 
 		if(fs_makedir(string("train\\" + dir_name + "\\demos").c_str()) != 0)
 		{
 			dbg_msg("neuralnetwork", "Can't make demos directory");
+			system("PAUSE");
 			exit(1);
 		}
 		dbg_msg("neuralnetwork", "Train directory with folders created: %s.", ("train\\" + dir_name).c_str());
+	}
 
+	dbg_msg("neuralnetwork", "Initializing neural model...");
+
+	try
+	{
+		model_manager = new ModelManager(is_training, "train\\" + dir_name, available_ticks_to_store, count_player_bots, Seed);
+		if(load_model)
+		{
+			dbg_msg("neuralnetwork", "Loading model...");
+			bool loaded = model_manager->LoadModels(load_folder_path, load_main_model_name, load_previous);
+			dbg_msg("neuralnetwork", "Model is loaded: %s", loaded ? "true" : "false");
+		}
+	}
+	catch(const std::exception &e)
+	{
+		std::cout << "Error during ModelManager initialization: " << e.what() << std::endl;
+	}
+
+	dbg_msg("neuralnetwork", "Model initialized.");
+
+	if(is_training)
+	{
 		dbg_msg("neuralnetwork", "Adding bots...");
 		if(count_teams)
 		{
@@ -475,25 +505,6 @@ void CNeuralNetwork::OnInit()
 
 		dbg_msg("neuralnetwork", "Bots added");
 	}
-
-	dbg_msg("neuralnetwork", "Initializing neural model...");
-
-	try
-	{
-		model_manager = new ModelManager(is_training, "train\\" + dir_name, available_ticks_to_store, count_player_bots, Seed);
-		if(load_model)
-		{
-			dbg_msg("neuralnetwork", "Loading model...");
-			bool loaded = model_manager->LoadModels(load_folder_path, load_main_model_name, load_previous);
-			dbg_msg("neuralnetwork", "Model is loaded: %s", loaded ? "true" : "false");
-		}
-	}
-	catch(const std::exception &e)
-	{
-		std::cout << "Error during ModelManager initialization: " << e.what() << std::endl;
-	}
-
-	dbg_msg("neuralnetwork", "Model initialized.");
 
 	if(is_training)
 	{
@@ -565,6 +576,7 @@ void CNeuralNetwork::OnInit()
 					"Maximal Direction entropy",
 					"Count ticks with current",
 					"Count ticks with old",
+					"Time to update"
 				};
 
 				// Write the CSV header
@@ -1366,8 +1378,11 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 			static size_t count_episodes_processed = 0;
 			static size_t count_every_update = 0;
 			bool cache_model = count_updated % cache_model_gap == 0 && model_manager->IsTraining();
+			auto start_time = std::chrono::high_resolution_clock::now();
 			model_manager->Update(avg_ball_hits, cache_model, updated,
 				stats);
+			now = std::chrono::high_resolution_clock::now();
+			cumulative_time_to_update += std::chrono::duration_cast<std::chrono::duration<float>>(now - start_time).count() * 1000.;
 			count_episodes_processed += count_episodes;
 			count_every_update += 1;
 			auto update_tick_delta = m_pServer->Tick() - last_update_tick;
@@ -1462,6 +1477,7 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 						// Print count ticks with new/old
 				       << "," << count_ticks_with_current
 				       << "," << count_ticks_with_old
+				       << "," << cumulative_time_to_update
 				       << endl;
 				dbg_msg("neuralnetwork",\
 					"Avg. first/second bot score: %f/%f "\
@@ -1499,6 +1515,7 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 				= freeze_cumulative_time \
 				= cumulative_ball_speed_x \
 				= cumulative_ball_abs_speed \
+				= cumulative_time_to_update \
 				= cumulative_time_to_decide \
 				= cumulative_time_to_tick \
 				= cumulative_time_rest \

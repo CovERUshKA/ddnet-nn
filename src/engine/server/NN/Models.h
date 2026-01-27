@@ -15,7 +15,9 @@ constexpr float EPSILON = 1e-7;
 // Network model for Proximal Policy Optimization on Incy Wincy.
 struct ActorCriticImpl : public torch::nn::Module 
 {
-	int64_t n_in, n_out;
+	int64_t n_in, n_out, h_lstm;
+
+	torch::nn::LSTM lstm = nullptr;
 
     // Actor.
     torch::nn::Sequential actor_network;
@@ -30,12 +32,14 @@ struct ActorCriticImpl : public torch::nn::Module
 
 	}
 
-    bool Initialize(int64_t n_in, int64_t n_out, int64_t h_start, double std)
+    bool Initialize(int64_t n_in, int64_t n_out, int64_t h_start, int64_t h_lstm, int64_t lstm_layers, double std)
     {
 	    this->n_in = n_in;
 	    this->n_out = n_out;
+	    this->h_lstm = h_lstm;
+	    lstm = torch::nn::LSTM(torch::nn::LSTMOptions(n_in, h_lstm).num_layers(lstm_layers).batch_first(true));
 	    actor_network = torch::nn::Sequential(
-		    torch::nn::Linear(n_in, h_start),
+		    torch::nn::Linear(h_lstm, h_start),
 		    torch::nn::ReLU(),
 		    torch::nn::Linear(h_start, h_start/2),
 			torch::nn::ReLU(),
@@ -51,7 +55,7 @@ struct ActorCriticImpl : public torch::nn::Module
 		//mu_ = torch::full(n_out, 0.);
 	    log_std_ = torch::full(2, std::log(std));
 		critic_network = torch::nn::Sequential(
-		    torch::nn::Linear(n_in, h_start),
+		    torch::nn::Linear(h_lstm, h_start),
 		    torch::nn::ReLU(),
 		    torch::nn::Linear(h_start, h_start / 2),
 		    torch::nn::ReLU(),
@@ -66,9 +70,12 @@ struct ActorCriticImpl : public torch::nn::Module
 
 	    //printf("Created from 0\n");
 
+		register_module("lstm", lstm);
 	    register_module("actor_network", actor_network);
         register_parameter("log_std", log_std_);
 	    register_module("critic_network", critic_network);
+
+		this->lstm->flatten_parameters();
 	
 		//std::cout << log_std_ << std::endl;
 	    return true;
@@ -81,7 +88,12 @@ struct ActorCriticImpl : public torch::nn::Module
 	    torch::Tensor action;
 	    try
 	    {
-		    action = actor_network->forward(x);
+		    // Expect x shape [batch, n_in]. Convert to sequence length 1 for LSTM.
+		    auto seq = x.unsqueeze(1); // [batch, 1, n_in]
+		    auto lstm_out_tuple = lstm->forward(seq);
+		    auto lstm_out = std::get<0>(lstm_out_tuple); // [batch, 1, lstm_hidden]
+		    auto feat = lstm_out.squeeze(1); // [batch, lstm_hidden]
+		    action = actor_network->forward(feat);
 	    }
 	    catch(const std::exception &e)
 	    {
@@ -92,12 +104,62 @@ struct ActorCriticImpl : public torch::nn::Module
 	    return action;
     }
 
+	// Forward pass for a sequence with provided LSTM hidden state.
+    // Input `seq` shape: [batch, seq_len, n_in]
+    // `h`/`c` shape: [batch, num_layers, lstm_hidden]
+    // Returns tuple: (actions_seq [batch, seq_len, n_out], h_out, c_out)
+    auto actor_forward_sequence(torch::Tensor x, torch::Tensor h, torch::Tensor c) -> std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
+    {
+	    // Run LSTM with provided hidden state
+	    auto seq = x.unsqueeze(1);
+	    //std::cout << "seq sizes: " << seq.sizes() << std::endl;
+	    auto lstm_out_tuple = lstm->forward(seq, std::make_tuple(h, c));
+	    auto lstm_out = std::get<0>(lstm_out_tuple); // [batch, seq_len, lstm_hidden]
+	    auto h_out_tuple = std::get<1>(lstm_out_tuple);
+	    auto h_out = std::get<0>(h_out_tuple);
+	    auto c_out = std::get<1>(h_out_tuple);
+	    //std::cout << "lstm_out sizes: " << lstm_out.sizes() << std::endl;
+	    // Flatten time dimension to apply actor network to each timestep
+	    auto batch = lstm_out.size(0);
+	    auto seq_len = lstm_out.size(1);
+	    auto feat = lstm_out.reshape({batch * seq_len, this->h_lstm});
+	    auto actions_flat = actor_network->forward(feat);
+	    //auto actions = actions_flat.reshape({batch, seq_len, n_out});
+	    //std::cout << "actions sizes: " << lstm_out.sizes() << std::endl;
+	    return {actions_flat, h_out, c_out};
+    }
+
     // Forward pass.
     auto critic_forward(torch::Tensor x) -> torch::Tensor
     {
 	    // Critic.
-		torch::Tensor val = critic_network->forward(x);
+	    // Pass through LSTM first the same way as actor
+	    auto seq = x.unsqueeze(1);
+	    auto lstm_out_tuple = lstm->forward(seq);
+	    auto lstm_out = std::get<0>(lstm_out_tuple);
+	    auto feat = lstm_out.squeeze(1);
+	    torch::Tensor val = critic_network->forward(feat);
 	    return val;
+    }
+
+	// Critic forward for sequence with provided LSTM hidden state.
+    // Input `x` shape: [batch, n_in]
+    // Returns tuple: (values_seq [batch, seq_len, 1], h_out, c_out)
+    auto critic_forward_sequence(torch::Tensor x, torch::Tensor h, torch::Tensor c) -> std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
+    {
+	    auto seq = x.unsqueeze(1);
+	    auto lstm_out_tuple = lstm->forward(seq, std::make_tuple(h, c));
+	    auto lstm_out = std::get<0>(lstm_out_tuple); // [batch, seq_len, lstm_hidden]
+	    auto h_out_tuple = std::get<1>(lstm_out_tuple);
+	    auto h_out = std::get<0>(h_out_tuple);
+	    auto c_out = std::get<1>(h_out_tuple);
+
+	    auto batch = lstm_out.size(0);
+	    auto seq_len = lstm_out.size(1);
+	    auto feat = lstm_out.reshape({batch * seq_len, this->h_lstm});
+	    auto vals_flat = critic_network->forward(feat);
+	    //auto vals = vals_flat.reshape({batch, seq_len, 1});
+	    return {vals_flat, h_out, c_out};
     }
 
 	// Copy constructor
@@ -109,6 +171,9 @@ struct ActorCriticImpl : public torch::nn::Module
 	    // Clone the critic network from the other model
 	    critic_network = std::dynamic_pointer_cast<torch::nn::SequentialImpl>(other->critic_network->clone());
 
+		// Clone the critic network from the other model
+	    lstm = std::dynamic_pointer_cast<torch::nn::LSTMImpl>(other->lstm->clone());
+	    this->lstm->flatten_parameters();
 	    // Copy the log_std_ parameter
 	    log_std_ = other->log_std_.detach().clone();
 	    if(!other->is_training())
@@ -120,6 +185,7 @@ struct ActorCriticImpl : public torch::nn::Module
 		    this->train();
 	    }
 	    //printf("Copied\n");
+	    register_module("lstm", lstm);
 	    register_module("actor_network", actor_network);
 	    register_parameter("log_std", log_std_);
 	    register_module("critic_network", critic_network);
@@ -137,7 +203,9 @@ struct ActorCriticImpl : public torch::nn::Module
 		critic_network = std::dynamic_pointer_cast<torch::nn::SequentialImpl>(other->critic_network->clone());
 		//printf("1\n");
 		//std::cout << other->log_std_ << std::endl;
-
+		//  Clone the critic network from the other model
+		lstm = std::dynamic_pointer_cast<torch::nn::LSTMImpl>(other->lstm->clone());
+		this->lstm->flatten_parameters();
 	    // Copy the log_std_ parameter
 	    log_std_ = other->log_std_.clone();
 	    if(!other->is_training())
