@@ -63,7 +63,8 @@ metrics = [
     ("Critic weight norm", None),
     ("Actor activation mean", None),
     ("Actor activation std", None),
-    ("Learning rate", None)
+    ("Learning rate", None),
+    ("Time to update", None)
 ]
 
 # Number of time-related plots

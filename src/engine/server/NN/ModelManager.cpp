@@ -1,4 +1,4 @@
-#include <math.h>
+﻿#include <math.h>
 #include <torch/torch.h>
 #include <torch/script.h>
 #include <base/vmath.h>
@@ -24,6 +24,7 @@ int64_t n_in = 40;
 int64_t n_out = 7;
 int64_t h_start = 1024; // 1024 256
 int64_t h_lstm = 256; // 256
+int64_t seq_len = 32;
 int64_t lstm_layers = 1; // 1024 256
 double std_dev = 0.37; // log(0.37) ~ -1
 double learning_rate = 5e-5;
@@ -240,7 +241,7 @@ ModelManager::ModelManager(bool is_training, std::string train_folder, size_t ba
 	printf("Copied.\n");
 	if(ac_update->is_training())
 	{
-		PPO::Initilize(batch_size, count_bots, n_in, lstm_layers, h_lstm);
+		PPO::Initilize(batch_size, count_bots, n_in, lstm_layers, h_lstm, seq_len);
 		int botes = count_bots - old_bots_indexes.size();
 		//ac_work->presample_normal((batch_size / botes) * 1.5, botes);
 		cout << "Learning rate: " << learning_rate
@@ -536,7 +537,7 @@ std::vector<ModelOutput> ModelManager::Decide(
 		torch::StreamGuard stream_guard{graph_stream};
 		graph.capture_begin();
 
-		auto main_output = ac_work->actor_forward_sequence(graph_main_input_tensor, graph_h_main_input_tensor, graph_c_main_input_tensor);
+		auto main_output = ac_work->actor_forward(graph_main_input_tensor, graph_h_main_input_tensor, graph_c_main_input_tensor);
 
 		graph_main_output_tensor.copy_(std::get<0>(main_output), true);
 		graph_h_main_output_tensor.copy_(std::get<1>(main_output), true);
@@ -545,7 +546,7 @@ std::vector<ModelOutput> ModelManager::Decide(
 		for(int i = 0; i < graph_input_tensors.size(); ++i)
 		{
 			int model_id = input_to_model_id[old_indices[i]]; // get the model id for this input
-			auto av_old = old_ac[model_id]->actor_forward_sequence(
+			auto av_old = old_ac[model_id]->actor_forward(
 				graph_input_tensors[i],
 				graph_h_input_tensors[i],
 				graph_c_input_tensors[i]
@@ -561,7 +562,7 @@ std::vector<ModelOutput> ModelManager::Decide(
 	else if(!graph_recorded && warmup_index < 3)
 	{
 		//printf("AAA\n");
-		auto main_output = ac_work->actor_forward_sequence(graph_main_input_tensor, graph_h_main_input_tensor, graph_c_main_input_tensor);
+		auto main_output = ac_work->actor_forward(graph_main_input_tensor, graph_h_main_input_tensor, graph_c_main_input_tensor);
 		//printf("BB\n");
 		graph_main_output_tensor.copy_(std::get<0>(main_output), true);
 		//printf("CCC\n");
@@ -573,7 +574,7 @@ std::vector<ModelOutput> ModelManager::Decide(
 		{
 			//printf("1.2\n");
 			int model_id = input_to_model_id[old_indices[i]]; // get the model id for this input
-			auto av_old = old_ac[model_id]->actor_forward_sequence(graph_input_tensors[i], graph_h_input_tensors[i], graph_c_input_tensors[i]);
+			auto av_old = old_ac[model_id]->actor_forward(graph_input_tensors[i], graph_h_input_tensors[i], graph_c_input_tensors[i]);
 			//printf("22\n");
 			graph_output_tensors[i].copy_(std::get<0>(av_old).reshape({1, ac_work->n_out}), true); // store the result for this old model
 			//printf("33\n");

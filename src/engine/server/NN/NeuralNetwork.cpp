@@ -381,7 +381,7 @@ void CNeuralNetwork::OnInit()
 
 	load_model = false;
 	load_previous = true;
-	load_folder_path = "train\\1769534105478";
+	load_folder_path = "train\\1769548856543_lstm_seq_len_1_beginning";
 	load_main_model_name = "last";
 
 	bool record_initial_demo = false;
@@ -1043,7 +1043,7 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 	static float step_reward = -0.02f; // -0.001f Applies every tick
 	static float divide_reward_by = 10.f;
 
-	static int force_stop_tick = 2000; // 2000 20 minutes to play. If more than this - force stop.
+	static int force_stop_tick = 2000; // 2000 * skip_tick(3) / 10 = 600 seconds = 10 minutes. 10 minutes to play. If more than this - force stop.
 
 	static int current_old_shuffle_counter = 0; // Save 1 old per 4 current
 

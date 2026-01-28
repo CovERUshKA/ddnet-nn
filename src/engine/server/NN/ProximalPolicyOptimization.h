@@ -29,7 +29,7 @@ class PPO
 {
 public:
     //static auto returns(VT& rewards, VT& dones, VT& vals, double gamma, double lambda) -> VT; // Generalized advantage estimate, https://arxiv.org/abs/1506.02438
-	static auto Initilize(size_t batch_size, size_t count_players, int n_in, int lstm_layers, int h_lstm_size) -> void;
+	static auto Initilize(size_t batch_size, size_t count_players, int n_in, int lstm_layers, int h_lstm_size, int seq_len) -> void;
 
 	static auto update(ActorCritic &ac, ActorCritic &ac_work,
 		std::shared_ptr<torch::optim::Adam> &opt,
@@ -57,11 +57,13 @@ public:
 class ReplayBuffer
 {
 public:
-	ReplayBuffer(size_t capacity, size_t count_players, int n_in, int lstm_layers, int h_lstm_size) :
+	ReplayBuffer(size_t capacity, size_t count_players, int n_in, int lstm_layers, int h_lstm_size, int seq_len) :
 		_capacity(capacity), count_players(count_players), count_episodes(0), last_index(0), last_episode_index(0), last_values_and_returns_index(0)
 	{
 		//dones.resize(capacity);
 		//rewards.resize(capacity);
+		this->n_in = n_in;
+		this->seq_len = seq_len;
 		states = torch::empty({(long long)capacity, n_in}, torch::kCUDA);
 		actions = torch::empty({(long long)capacity, 5}, torch::kCUDA);
 		log_probs = torch::empty({(long long)capacity, 1}, torch::kCUDA);
@@ -520,6 +522,8 @@ public:
 			}
 		}
 		last_index = end;
+		int num_batches = (end - start) / seq_len;
+		end = start + num_batches * seq_len;
 		//printf("1\n");
 		/*if(start != 0 && dones_concat[start - 1] != true)
 		{
@@ -544,12 +548,13 @@ public:
 		returns_concat_ret = returns.index({torch::indexing::Slice(start, end)});*/
 
 		auto group_indices = all_indices.slice(0, start, end);
+		torch::Tensor seq_start_indices = torch::arange(start, end, seq_len, torch::kCUDA);
 
-		states_concatenated_ret = states.index_select(0, group_indices);
+		states_concatenated_ret = states.index_select(0, group_indices).reshape({num_batches, seq_len, n_in});
 		actions_concat_ret = actions.index_select(0, group_indices);
 		log_probs_concat_ret = log_probs.index_select(0, group_indices);
-		h_lstm_concat_ret = h_lstm.index_select(1, group_indices);
-		c_lstm_concat_ret = c_lstm.index_select(1, group_indices);
+		h_lstm_concat_ret = h_lstm.index_select(1, seq_start_indices);
+		c_lstm_concat_ret = c_lstm.index_select(1, seq_start_indices);
 		values_concat_ret = values.index_select(0, group_indices);
 		returns_concat_ret = returns.index_select(0, group_indices);
 
@@ -582,6 +587,7 @@ private:
 	size_t last_index, last_episode_index, last_values_and_returns_index;
 	size_t count_episodes;
 	size_t count_players;
+	int n_in, seq_len;
 	size_t _capacity;
 	torch::Tensor states, actions, log_probs, h_lstm, c_lstm, values, returns, all_indices;
 	//torch::Tensor states_concatenated_reshaped, actions_concat_reshaped, log_probs_concat_reshaped;
@@ -613,9 +619,9 @@ torch::Tensor normalize_rewards(const torch::Tensor &rewards)
 
 static ReplayBuffer* replay_buffer = nullptr;
 
-auto PPO::Initilize(size_t batch_size, size_t count_players, int n_in, int lstm_layers, int h_lstm_size) -> void
+auto PPO::Initilize(size_t batch_size, size_t count_players, int n_in, int lstm_layers, int h_lstm_size, int seq_len) -> void
 {
-	replay_buffer = new ReplayBuffer(batch_size, count_players, n_in, lstm_layers, h_lstm_size); // (256000, 256)
+	replay_buffer = new ReplayBuffer(batch_size, count_players, n_in, lstm_layers, h_lstm_size, seq_len); // (256000, 256)
 }
 
 torch::Tensor normalize_advantages(const torch::Tensor &advantages)
@@ -846,7 +852,7 @@ auto PPO::update(ActorCritic &ac, ActorCritic &ac_work,
 		//printf("Calculating GAE of episodes...");
 		while(replay_buffer->next_episodes(mini_batch_size, states, actions, log_probs, h_lstm, c_lstm, rewards, accumulation_resets, dones))
 		{ 
-			auto [cpy_values, h_out_values, c_out_values] = ac_work->critic_forward_sequence(states, h_lstm, c_lstm);
+			auto [cpy_values, h_out_values, c_out_values] = ac_work->critic_forward(states, h_lstm, c_lstm);
 			cpy_values = cpy_values.detach();
 
 			auto returns = calculate_returns(rewards, accumulation_resets, dones, cpy_values, gamma, lambda);
@@ -886,6 +892,7 @@ auto PPO::update(ActorCritic &ac, ActorCritic &ac_work,
 
 				// printf("UPDATING1.1\n");
 				auto [action, h_out_action, c_out_action] = ac->actor_forward_sequence(cpy_sta, h_lstm, c_lstm);
+				action = action.reshape({action.size(0) * action.size(1), action.size(2)});
 				//printf("4\n");
 				//Sleep(3000);
 				//std::cout << action.slice(0, 0, 10) << std::endl;
@@ -943,6 +950,7 @@ auto PPO::update(ActorCritic &ac, ActorCritic &ac_work,
 				// printf("4.9\n");
 				// Sleep(7000);
 				auto [val, h_out_val, c_out_val] = ac->critic_forward_sequence(cpy_sta, h_lstm, c_lstm);
+				val = val.reshape({val.size(0) * val.size(1), val.size(2)});
 				// printf("5\n");
 				// Sleep(7000);
 				auto actor_loss = -torch::min(surr1, surr2).mean();
@@ -1004,9 +1012,9 @@ auto PPO::update(ActorCritic &ac, ActorCritic &ac_work,
 				total_critic_weight_norm += critic_weight_norm;
 
 				// Compute activation statistics
-				auto actor_activations = ac->actor_forward(cpy_sta);
-				auto actor_activation_mean = actor_activations.mean().item<double>();
-				auto actor_activation_std = actor_activations.std().item<double>();
+				//auto actor_activations = ac->actor_forward(cpy_sta);
+				auto actor_activation_mean = action.mean().item<double>();
+				auto actor_activation_std = action.std().item<double>();
 				total_actor_activation_mean += actor_activation_mean;
 				total_actor_activation_std += actor_activation_std;
 
