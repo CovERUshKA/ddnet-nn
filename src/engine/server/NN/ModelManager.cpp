@@ -52,20 +52,24 @@ int warmup_index = 0;
 ActorCritic ac_update;
 ActorCritic ac_work;
 std::shared_ptr<torch::optim::Adam> opt;
-std::shared_ptr<torch::optim::ReduceLROnPlateauScheduler> scheduler;
+//std::shared_ptr<torch::optim::ReduceLROnPlateauScheduler> scheduler;
 
 std::deque<ActorCritic> old_ac;
 std::vector<int> old_bots_indexes;
 std::vector<int> input_to_model_id;
+torch::Tensor input_to_model_id_tensor_old_indexes;
+torch::Tensor input_to_model_id_tensor_current_indexes;
 bool graph_recorded = false;
 
-// Tested CUDA Graphs - produce numerical instability with XMP profile turned on. Turn XMP profile off and make sure the system is stable.
-std::vector<torch::Tensor> graph_input_tensors;
-std::vector<torch::Tensor> graph_h_input_tensors;
-std::vector<torch::Tensor> graph_c_input_tensors;
-std::vector<torch::Tensor> graph_output_tensors;
-std::vector<torch::Tensor> graph_h_output_tensors;
-std::vector<torch::Tensor> graph_c_output_tensors;
+// Tested CUDA Graphs and it produced numerical instability with XMP profile turned on. Turn XMP profile off and make sure the system is stable.
+// Graph old model tensors
+torch::Tensor graph_input_tensors,
+			graph_h_input_tensors,
+			graph_c_input_tensors,
+			graph_output_tensors,
+			graph_h_output_tensors,
+			graph_c_output_tensors;
+// Graph current model tensors
 torch::Tensor graph_main_input_tensor,
 			graph_h_main_input_tensor,
 			graph_c_main_input_tensor,
@@ -124,6 +128,51 @@ void generate_random_hyperparameters()
 	return;
 }
 
+void ModelManager::ResetCUDAGraph()
+{
+	// Convert input_to_model_id to a tensor for use in the graph
+	auto options = torch::TensorOptions()
+			       .dtype(torch::kInt32);
+	if(!input_to_model_id.empty())
+	{
+		auto options = torch::TensorOptions()
+				       .dtype(torch::kInt32);
+		torch::Tensor input_to_model_id_tensor = torch::from_blob(input_to_model_id.data(), {static_cast<int>(input_to_model_id.size())}, options).to(device, true);
+		input_to_model_id_tensor_current_indexes = (input_to_model_id_tensor == -1).nonzero().flatten();
+		input_to_model_id_tensor_old_indexes = (input_to_model_id_tensor != -1).nonzero().flatten();
+	}
+	else
+	{
+		input_to_model_id_tensor_current_indexes = torch::arange(0, count_bots, torch::kInt32).to(torch::kCUDA, true);
+		input_to_model_id_tensor_old_indexes = torch::empty({0}, torch::kInt32).to(torch::kCUDA, true);
+	}
+	// std::cout << input_to_model_id_tensor_current_indexes << std::endl;
+	// std::cout << input_to_model_id_tensor_old_indexes << std::endl;
+
+	if(is_training)
+	{
+		int old_models_count = (int)old_bots_indexes.size();
+		graph_input_tensors = torch::empty({old_models_count, n_in}, torch::kCUDA);
+		graph_h_input_tensors = torch::zeros({lstm_layers, old_models_count, h_lstm}, torch::kCUDA);
+		graph_c_input_tensors = torch::zeros({lstm_layers, old_models_count, h_lstm}, torch::kCUDA);
+		graph_output_tensors = torch::empty({old_models_count, ac_work->n_out}, torch::kCUDA);
+		graph_h_output_tensors = torch::zeros({lstm_layers, old_models_count, h_lstm}, torch::kCUDA);
+		graph_c_output_tensors = torch::zeros({lstm_layers, old_models_count, h_lstm}, torch::kCUDA);
+	}
+	int current_models_count = count_bots - old_bots_indexes.size();
+	graph_main_input_tensor = torch::empty({current_models_count, n_in}, torch::kCUDA);
+	graph_h_main_input_tensor = torch::zeros({lstm_layers, current_models_count, h_lstm}, torch::kCUDA);
+	graph_c_main_input_tensor = torch::zeros({lstm_layers, current_models_count, h_lstm}, torch::kCUDA);
+	graph_main_output_tensor = torch::empty({current_models_count, ac_work->n_out}, torch::kCUDA);
+	graph_h_main_output_tensor = torch::zeros({lstm_layers, current_models_count, h_lstm}, torch::kCUDA);
+	graph_c_main_output_tensor = torch::zeros({lstm_layers, current_models_count, h_lstm}, torch::kCUDA);
+	graph_recorded = false;
+	graph.reset();
+	// Forcefully clear the CUDA cache to free up cached memory from previous graphs
+	c10::cuda::CUDACachingAllocator::emptyCache();
+	warmup_index = 0;
+}
+
 ModelManager::ModelManager(bool is_training, std::string train_folder, size_t batch_size, size_t count_players, uint64_t seed) :
 	batch_size(batch_size), iReplaysPerBot(batch_size / count_players), count_bots(count_players)
 {
@@ -137,31 +186,11 @@ ModelManager::ModelManager(bool is_training, std::string train_folder, size_t ba
 	ac_update->Initialize(n_in, n_out, h_start, h_lstm, lstm_layers, std_dev);
 	ac_work->Initialize(n_in, n_out, h_start, h_lstm, lstm_layers, std_dev);
 
-	ResetAllBotsMemory();
+	h_lstm_states_saved = torch::zeros({lstm_layers, count_bots, h_lstm}, torch::kCUDA);
+	c_lstm_states_saved = torch::zeros({lstm_layers, count_bots, h_lstm}, torch::kCUDA);
 
-	graph_input_tensors.clear();
-	graph_output_tensors.clear();
-	for(size_t i = 0; i < old_bots_indexes.size(); i++)
-	{
-		torch::Tensor empty_in = torch::empty({1, n_in}, torch::kCUDA);
-		torch::Tensor zeros_h_in = torch::zeros({lstm_layers, 1, h_lstm}, torch::kCUDA);
-		torch::Tensor zeros_c_in = torch::zeros({lstm_layers, 1, h_lstm}, torch::kCUDA);
-		graph_input_tensors.push_back(empty_in);
-		graph_h_input_tensors.push_back(zeros_h_in);
-		graph_c_input_tensors.push_back(zeros_c_in);
-		torch::Tensor empty_out = torch::empty({1, ac_work->n_out}, torch::kCUDA);
-		torch::Tensor zeros_h_out = torch::zeros({lstm_layers, 1, h_lstm}, torch::kCUDA);
-		torch::Tensor zeros_c_out = torch::zeros({lstm_layers, 1, h_lstm}, torch::kCUDA);
-		graph_output_tensors.push_back(empty_out);
-		graph_h_output_tensors.push_back(zeros_h_out);
-		graph_c_output_tensors.push_back(zeros_c_out);
-	}
-	graph_main_input_tensor = torch::empty({(int)(count_bots - old_bots_indexes.size()), n_in}, torch::kCUDA);
-	graph_h_main_input_tensor = torch::zeros({lstm_layers, (int)(count_bots - old_bots_indexes.size()), h_lstm}, torch::kCUDA);
-	graph_c_main_input_tensor = torch::zeros({lstm_layers, (int)(count_bots - old_bots_indexes.size()), h_lstm}, torch::kCUDA);
-	graph_main_output_tensor = torch::empty({(int)(count_bots - old_bots_indexes.size()), ac_work->n_out}, torch::kCUDA);
-	graph_h_main_output_tensor = torch::zeros({lstm_layers, (int)(count_bots - old_bots_indexes.size()), h_lstm}, torch::kCUDA);
-	graph_c_main_output_tensor = torch::zeros({lstm_layers, (int)(count_bots - old_bots_indexes.size()), h_lstm}, torch::kCUDA);
+	ResetAllBotsMemory();
+	ResetCUDAGraph();
 
 	// Global Speedups
 	// Produce nondetermenistic behavior even on the same gpu
@@ -181,20 +210,22 @@ ModelManager::ModelManager(bool is_training, std::string train_folder, size_t ba
 	ac_update->to(precision);
 
 	// Initialize the Adam optimizer with the parameter group
-	std::vector<torch::optim::OptimizerParamGroup> param_groups;
+	if(is_training)
+	{
+		std::vector<torch::optim::OptimizerParamGroup> param_groups;
 
-	param_groups.push_back(torch::optim::OptimizerParamGroup({ac_update->actor_network->parameters()},
-							std::make_unique<torch::optim::AdamOptions>(actor_learning_rate)));
-	param_groups.push_back(torch::optim::OptimizerParamGroup({ac_update->critic_network->parameters()},
-							std::make_unique<torch::optim::AdamOptions>(critic_learning_rate)));
-	param_groups.push_back(torch::optim::OptimizerParamGroup({ac_update->log_std_},
+		param_groups.push_back(torch::optim::OptimizerParamGroup({ac_update->actor_network->parameters()},
+			std::make_unique<torch::optim::AdamOptions>(actor_learning_rate)));
+		param_groups.push_back(torch::optim::OptimizerParamGroup({ac_update->critic_network->parameters()},
+			std::make_unique<torch::optim::AdamOptions>(critic_learning_rate)));
+		param_groups.push_back(torch::optim::OptimizerParamGroup({ac_update->log_std_},
 			std::make_unique<torch::optim::AdamOptions>(log_std_learning_rate)));
 
-	opt = std::make_shared<torch::optim::Adam>(param_groups);
-
-	scheduler = std::make_shared<torch::optim::ReduceLROnPlateauScheduler>(*opt, /* mode */ torch::optim::ReduceLROnPlateauScheduler::max, /* factor */ 0.5, /* patience */ 10);
-	opt->param_groups()[0].options().set_lr(actor_learning_rate);
-	opt->param_groups()[1].options().set_lr(critic_learning_rate);
+		opt = std::make_shared<torch::optim::Adam>(param_groups);
+		// scheduler = std::make_shared<torch::optim::ReduceLROnPlateauScheduler>(*opt, /* mode */ torch::optim::ReduceLROnPlateauScheduler::max, /* factor */ 0.5, /* patience */ 10);
+		opt->param_groups()[0].options().set_lr(actor_learning_rate);
+		opt->param_groups()[1].options().set_lr(critic_learning_rate);
+	}
 
 	//for(auto &param_group : opt->param_groups())
 	//{
@@ -242,7 +273,7 @@ ModelManager::ModelManager(bool is_training, std::string train_folder, size_t ba
 	if(ac_update->is_training())
 	{
 		PPO::Initilize(batch_size, count_bots, n_in, lstm_layers, h_lstm, seq_len);
-		int botes = count_bots - old_bots_indexes.size();
+		//int botes = count_bots - old_bots_indexes.size();
 		//ac_work->presample_normal((batch_size / botes) * 1.5, botes);
 		cout << "Learning rate: " << learning_rate
 		     << " Actor learning rate: " << actor_learning_rate
@@ -297,11 +328,14 @@ bool ModelManager::LoadModels(std::string folder_path, std::string main_model_na
 	}
 
 	torch::load(ac_update, folder_path + "\\models\\" + main_model_name + "_model.pt");
-	torch::load(*opt, folder_path + "\\models\\" + main_model_name + "_optimizer.pt");
+	if(is_training)
+	{
+		torch::load(*opt, folder_path + "\\models\\" + main_model_name + "_optimizer.pt");
+	}
 
 	std::cout << "Main model loaded path: " << folder_path + "\\models\\" + main_model_name + "_model.pt" << std::endl;
 
-	if(load_previous)
+	if(is_training && load_previous)
 	{
 		std::string previous_models_folder = folder_path + "\\models\\previous";
 		std::string new_models_folder = train_folder + "\\models\\previous";
@@ -362,8 +396,11 @@ bool ModelManager::LoadModels(std::string folder_path, std::string main_model_na
 		std::cout << "Number of old models loaded: " << old_ac.size() << std::endl;
 	}
 
-	opt->param_groups()[0].options().set_lr(actor_learning_rate);
-	opt->param_groups()[1].options().set_lr(critic_learning_rate);
+	if(is_training)
+	{
+		opt->param_groups()[0].options().set_lr(actor_learning_rate);
+		opt->param_groups()[1].options().set_lr(critic_learning_rate);
+	}
 
 	try
 	{
@@ -499,33 +536,45 @@ std::vector<ModelOutput> ModelManager::Decide(
 	std::vector<size_t> old_indices; // To track the original indices of old model inputs
 	std::vector<size_t> current_indices; // To track the original indices of current model inputs
 	std::vector<torch::Tensor> old_batches;
-	int graph_counter = 0;
-	int graph_main_counter = 0;
+	//int graph_counter = 0;
+	//int graph_main_counter = 0;
 	//printf("C\n");
+	if(!is_training && old_bots_indexes.size())
+	{
+		graph_input_tensors.copy_(state_gpu.index_select(0, input_to_model_id_tensor_old_indexes), true);
+		graph_h_input_tensors.copy_(h_lstm_states.index_select(1, input_to_model_id_tensor_old_indexes), true);
+		graph_c_input_tensors.copy_(c_lstm_states.index_select(1, input_to_model_id_tensor_old_indexes), true);
+	}
+	//printf("D\n");
+
+	graph_main_input_tensor.copy_(state_gpu.index_select(0, input_to_model_id_tensor_current_indexes), true);
+	graph_h_main_input_tensor.copy_(h_lstm_states.index_select(1, input_to_model_id_tensor_current_indexes), true);
+	graph_c_main_input_tensor.copy_(c_lstm_states.index_select(1, input_to_model_id_tensor_current_indexes), true);
+	//printf("RR\n");
 	for(size_t i = 0; i < input_inputs.size(); ++i)
 	{
 		if(!input_to_model_id.empty() && input_to_model_id[i] != -1)
 		{
-			graph_input_tensors[graph_counter].copy_(state_gpu[i].reshape({1, n_in}), true);
+			/*graph_input_tensors[graph_counter].copy_(state_gpu[i].reshape({1, n_in}), true);
 			graph_h_input_tensors[graph_counter].copy_(h_lstm_states[0][i].reshape({lstm_layers, 1, h_lstm}), true);
-			graph_c_input_tensors[graph_counter].copy_(c_lstm_states[0][i].reshape({lstm_layers, 1, h_lstm}), true);
+			graph_c_input_tensors[graph_counter].copy_(c_lstm_states[0][i].reshape({lstm_layers, 1, h_lstm}), true);*/
 			//old_states.push_back(state_gpu[i].reshape({1, n_in}));
 			old_indices.push_back(i); // Track the original index
-			graph_counter += 1;
+			//graph_counter += 1;
 		}
 		else
 		{
-			graph_main_input_tensor[graph_main_counter].copy_(state_gpu[i].reshape({n_in}), true);
+			/*graph_main_input_tensor[graph_main_counter].copy_(state_gpu[i].reshape({n_in}), true);
 			graph_h_main_input_tensor[0][graph_main_counter].copy_(h_lstm_states[0][i], true);
-			graph_c_main_input_tensor[0][graph_main_counter].copy_(c_lstm_states[0][i], true);
+			graph_c_main_input_tensor[0][graph_main_counter].copy_(c_lstm_states[0][i], true);*/
 			//current_states.push_back(state_gpu[i].reshape({1, n_in}));
 			current_indices.push_back(i); // Track the original index
-			graph_main_counter += 1;
+			//graph_main_counter += 1;
 		}
 	}
 
-	h_lstm_states_saved = h_lstm_states.clone();
-	c_lstm_states_saved = c_lstm_states.clone();
+	h_lstm_states_saved.copy_(h_lstm_states);
+	c_lstm_states_saved.copy_(c_lstm_states);
 
 	auto now = std::chrono::high_resolution_clock::now();
 	time_pre_forward = std::chrono::duration<double>(now - measure_time).count() * 1000.;
@@ -538,22 +587,20 @@ std::vector<ModelOutput> ModelManager::Decide(
 		graph.capture_begin();
 
 		auto main_output = ac_work->actor_forward(graph_main_input_tensor, graph_h_main_input_tensor, graph_c_main_input_tensor);
-
 		graph_main_output_tensor.copy_(std::get<0>(main_output), true);
 		graph_h_main_output_tensor.copy_(std::get<1>(main_output), true);
 		graph_c_main_output_tensor.copy_(std::get<2>(main_output), true);
 
-		for(int i = 0; i < graph_input_tensors.size(); ++i)
+		for(int i = 0; i < old_bots_indexes.size(); ++i)
 		{
 			int model_id = input_to_model_id[old_indices[i]]; // get the model id for this input
 			auto av_old = old_ac[model_id]->actor_forward(
-				graph_input_tensors[i],
-				graph_h_input_tensors[i],
-				graph_c_input_tensors[i]
-			);
-			graph_output_tensors[i].copy_(std::get<0>(av_old).reshape({1, ac_work->n_out}), true); // store the result for this old model
-			graph_h_output_tensors[i].copy_(std::get<1>(av_old), true);
-			graph_c_output_tensors[i].copy_(std::get<2>(av_old), true);
+				graph_input_tensors[i].reshape({1, ac_work->n_in}),
+				graph_h_input_tensors[0][i].reshape({lstm_layers, 1, h_lstm}),
+				graph_c_input_tensors[0][i].reshape({lstm_layers, 1, h_lstm}));
+			graph_output_tensors[i].copy_(std::get<0>(av_old).reshape({ac_work->n_out}), true); // store the result for this old model
+			graph_h_output_tensors[0][i].copy_(std::get<1>(av_old).reshape({h_lstm}), true);
+			graph_c_output_tensors[0][i].copy_(std::get<2>(av_old).reshape({h_lstm}), true);
 		}
 
 		graph.capture_end();
@@ -561,26 +608,23 @@ std::vector<ModelOutput> ModelManager::Decide(
 	}
 	else if(!graph_recorded && warmup_index < 3)
 	{
-		//printf("AAA\n");
 		auto main_output = ac_work->actor_forward(graph_main_input_tensor, graph_h_main_input_tensor, graph_c_main_input_tensor);
-		//printf("BB\n");
 		graph_main_output_tensor.copy_(std::get<0>(main_output), true);
-		//printf("CCC\n");
 		graph_h_main_output_tensor.copy_(std::get<1>(main_output), true);
-		//printf("DDDD\n");
 		graph_c_main_output_tensor.copy_(std::get<2>(main_output), true);
-
-		for(int i = 0; i < graph_input_tensors.size(); ++i)
+		for(int i = 0; i < old_bots_indexes.size(); ++i)
 		{
-			//printf("1.2\n");
 			int model_id = input_to_model_id[old_indices[i]]; // get the model id for this input
-			auto av_old = old_ac[model_id]->actor_forward(graph_input_tensors[i], graph_h_input_tensors[i], graph_c_input_tensors[i]);
-			//printf("22\n");
-			graph_output_tensors[i].copy_(std::get<0>(av_old).reshape({1, ac_work->n_out}), true); // store the result for this old model
-			//printf("33\n");
-			graph_h_output_tensors[i].copy_(std::get<1>(av_old), true);
-			//printf("512312\n");
-			graph_c_output_tensors[i].copy_(std::get<2>(av_old), true);
+			auto av_old = old_ac[model_id]->actor_forward(
+				graph_input_tensors[i].reshape({1, ac_work->n_in}),
+				graph_h_input_tensors[0][i].reshape({lstm_layers, 1, h_lstm}),
+				graph_c_input_tensors[0][i].reshape({lstm_layers, 1, h_lstm}));
+			//printf("RR2.2\n");
+			graph_output_tensors[i].copy_(std::get<0>(av_old).reshape({ac_work->n_out}), true); // store the result for this old model
+			//printf("RR2.3\n");
+			graph_h_output_tensors[0][i].copy_(std::get<1>(av_old).reshape({h_lstm}), true);
+			//printf("RR2.4\n");
+			graph_c_output_tensors[0][i].copy_(std::get<2>(av_old).reshape({h_lstm}), true);
 		}
 		warmup_index += 1;
 	}
@@ -588,6 +632,7 @@ std::vector<ModelOutput> ModelManager::Decide(
 	{
 		graph.replay();
 	}
+	//printf("WEWE\n");
 	now = std::chrono::high_resolution_clock::now();
 	time_forward = std::chrono::duration<double>(now - measure_time).count() * 1000.;
 	measure_time = std::chrono::high_resolution_clock::now();
@@ -604,24 +649,16 @@ std::vector<ModelOutput> ModelManager::Decide(
 	now = std::chrono::high_resolution_clock::now();
 	time_normal = std::chrono::duration<double>(now - measure_time).count() * 1000.;
 	measure_time = std::chrono::high_resolution_clock::now();
-	//printf("331\n");
-	// Combine results from old models and current model in the correct order
-	std::vector<torch::Tensor> all_actions_sampled(input_inputs.size()), all_actions_original(input_inputs.size());
-	for(size_t i = 0; i < graph_output_tensors.size(); ++i)
-	{
-		all_actions_sampled[old_indices[i]] = old_current_sampled[i]; // Place old model results in their original positions
-		all_actions_original[old_indices[i]] = graph_output_tensors[i].reshape({ac_work->n_out});
-		h_lstm_states[0][old_indices[i]].copy_(graph_h_output_tensors[i][0][0]);
-		c_lstm_states[0][old_indices[i]].copy_(graph_c_output_tensors[i][0][0]);
-	}
-	for(size_t i = 0; i < current_indices.size(); ++i)
-	{
-		all_actions_sampled[current_indices[i]] = av_current_sampled[i]; // Place current model results in their original positions
-		all_actions_original[current_indices[i]] = graph_main_output_tensor[i];
-		h_lstm_states[0][current_indices[i]].copy_(graph_h_main_output_tensor[0][i]);
-		c_lstm_states[0][current_indices[i]].copy_(graph_c_main_output_tensor[0][i]);
-	}
-	//printf("CC1\n");
+
+	torch::Tensor tActions_original = torch::zeros({(int)input_inputs.size(), ac_work->n_out}, device);
+	torch::Tensor tActions_sampled = torch::zeros({(int)input_inputs.size(), 5}, device);
+	tActions_original.index_copy_(0, input_to_model_id_tensor_old_indexes, graph_output_tensors);
+	tActions_original.index_copy_(0, input_to_model_id_tensor_current_indexes, graph_main_output_tensor);
+	h_lstm_states.index_copy_(1, input_to_model_id_tensor_old_indexes, graph_h_output_tensors);
+	h_lstm_states.index_copy_(1, input_to_model_id_tensor_current_indexes, graph_h_main_output_tensor);
+	c_lstm_states.index_copy_(1, input_to_model_id_tensor_old_indexes, graph_c_output_tensors);
+	c_lstm_states.index_copy_(1, input_to_model_id_tensor_current_indexes, graph_c_main_output_tensor);
+	
 	// Concatenate all actions into a single tensor
 	auto tActions_original = torch::cat(all_actions_original, 0).reshape({(int)input_inputs.size(), ac_work->n_out});
 	auto tActions_sampled = torch::cat(all_actions_sampled, 0).reshape({(int)input_inputs.size(), 5});
@@ -629,7 +666,7 @@ std::vector<ModelOutput> ModelManager::Decide(
 	now = std::chrono::high_resolution_clock::now();
 	time_to_cpu = std::chrono::duration<double>(now - measure_time).count() * 1000.;
 	measure_time = std::chrono::high_resolution_clock::now();
-
+	//printf("QRRRRWEWQE\n");
 	if(is_training && !validating)
 	{
 		auto tLogProbs = ac_work->log_prob(tActions_original, tActions_sampled);
@@ -800,33 +837,9 @@ void ModelManager::ReassignOldModels()
 		input_to_model_id[old_bots_indexes[i]] = static_cast<int>(round(random_float() * (float)(old_ac.size() - 1))); // Assign to old model
 	}
 
-	graph_input_tensors.clear();
-	graph_output_tensors.clear();
-	for(size_t i = 0; i < old_bots_indexes.size(); i++)
-	{
-		torch::Tensor empty_in = torch::empty({1, n_in}, torch::kCUDA);
-		torch::Tensor zeros_h_in = torch::zeros({lstm_layers, 1, h_lstm}, torch::kCUDA);
-		torch::Tensor zeros_c_in = torch::zeros({lstm_layers, 1, h_lstm}, torch::kCUDA);
-		graph_input_tensors.push_back(empty_in);
-		graph_h_input_tensors.push_back(zeros_h_in);
-		graph_c_input_tensors.push_back(zeros_c_in);
-		torch::Tensor empty_out = torch::empty({1, ac_work->n_out}, torch::kCUDA);
-		torch::Tensor zeros_h_out = torch::zeros({lstm_layers, 1, h_lstm}, torch::kCUDA);
-		torch::Tensor zeros_c_out = torch::zeros({lstm_layers, 1, h_lstm}, torch::kCUDA);
-		graph_output_tensors.push_back(empty_out);
-		graph_h_output_tensors.push_back(zeros_h_out);
-		graph_c_output_tensors.push_back(zeros_c_out);
-	}
-	graph_main_input_tensor = torch::empty({(int)(count_bots - old_bots_indexes.size()), n_in}, torch::kCUDA);
-	graph_h_main_input_tensor = torch::zeros({lstm_layers, (int)(count_bots - old_bots_indexes.size()), h_lstm}, torch::kCUDA);
-	graph_c_main_input_tensor = torch::zeros({lstm_layers, (int)(count_bots - old_bots_indexes.size()), h_lstm}, torch::kCUDA);
-	graph_main_output_tensor = torch::empty({(int)(count_bots - old_bots_indexes.size()), ac_work->n_out}, torch::kCUDA);
-	graph_h_main_output_tensor = torch::zeros({lstm_layers, (int)(count_bots - old_bots_indexes.size()), h_lstm}, torch::kCUDA);
-	graph_c_main_output_tensor = torch::zeros({lstm_layers, (int)(count_bots - old_bots_indexes.size()), h_lstm}, torch::kCUDA);
+	
 	ResetAllBotsMemory();
-	graph_recorded = false;
-	graph.reset();
-	warmup_index = 0;
+	ResetCUDAGraph();
 
 	return;
 }

@@ -379,12 +379,12 @@ void CNeuralNetwork::OnInit()
 	update_tick = count_ticks * skip_tick;
 	ticks_collected = last_update_tick = 0;
 
-	load_model = false;
+	load_model = true;
 	load_previous = true;
-	load_folder_path = "train\\1769548856543_lstm_seq_len_1_beginning";
+	load_folder_path = "train\\1769840131933";
 	load_main_model_name = "last";
 
-	bool record_initial_demo = false;
+	bool record_initial_demo = true;
 
 	const CMapItemLayerTilemap *pTileMap = m_pGameContext->Layers()->GameLayer();
 	const CTile *pTiles = static_cast<CTile *>(Kernel()->RequestInterface<IMap>()->GetData(pTileMap->m_Data));
@@ -442,15 +442,35 @@ void CNeuralNetwork::OnInit()
 		{
 			dbg_msg("neuralnetwork", "Loading model...");
 			bool loaded = model_manager->LoadModels(load_folder_path, load_main_model_name, load_previous);
-			dbg_msg("neuralnetwork", "Model is loaded: %s", loaded ? "true" : "false");
+			if(!loaded)
+			{
+				dbg_msg("neuralnetwork", "Failed to load model from %s", load_folder_path.c_str());
+				system("PAUSE");
+				exit(1);
+			}
+			dbg_msg("neuralnetwork", "Model is loaded: true");
 		}
 	}
 	catch(const std::exception &e)
 	{
 		std::cout << "Error during ModelManager initialization: " << e.what() << std::endl;
+		system("PAUSE");
+		exit(1);
 	}
 
 	dbg_msg("neuralnetwork", "Model initialized.");
+
+	// Recording demo to spectate how model performs
+	string path_demo;
+	{
+		if(model_manager->IsTraining() && record_initial_demo)
+		{
+			char aFilename[IO_MAX_PATH_LENGTH];
+			str_format(aFilename, sizeof(aFilename), "%s_%d_%llu.demo", m_pServer->m_aCurrentMap, m_pServer->m_NetServer.Address().port, time_get_impl());
+			path_demo = "train/" + dir_name + "/demos/" + aFilename;
+			int ret = m_pServer->m_aDemoRecorder[MAX_CLIENTS].Start(m_pStorage, m_pConsole, path_demo.c_str(), m_pGameContext->NetVersion(), m_pServer->m_aCurrentMap, &m_pServer->m_aCurrentMapSha256[CServer::MAP_TYPE_SIX], m_pServer->m_aCurrentMapCrc[CServer::MAP_TYPE_SIX], "server", m_pServer->m_aCurrentMapSize[CServer::MAP_TYPE_SIX], m_pServer->m_apCurrentMapData[CServer::MAP_TYPE_SIX]);
+		}
+	}
 
 	if(is_training)
 	{
@@ -593,19 +613,6 @@ void CNeuralNetwork::OnInit()
 			dbg_msg("neuralnetwork", "data.csv file created and initialized.");
 		}
 		
-	}
-
-
-	// Recording demo to spectate how model performs
-	string path_demo;
-	{
-		if(model_manager->IsTraining() && record_initial_demo)
-		{
-			char aFilename[IO_MAX_PATH_LENGTH];
-			str_format(aFilename, sizeof(aFilename), "%s_%d_%llu.demo", m_pServer->m_aCurrentMap, m_pServer->m_NetServer.Address().port, time_get_impl());
-			path_demo = "train/" + dir_name + "/demos/" + aFilename;
-			int ret = m_pServer->m_aDemoRecorder[MAX_CLIENTS].Start(m_pStorage, m_pConsole, path_demo.c_str(), m_pGameContext->NetVersion(), m_pServer->m_aCurrentMap, &m_pServer->m_aCurrentMapSha256[CServer::MAP_TYPE_SIX], m_pServer->m_aCurrentMapCrc[CServer::MAP_TYPE_SIX], "server", m_pServer->m_aCurrentMapSize[CServer::MAP_TYPE_SIX], m_pServer->m_apCurrentMapData[CServer::MAP_TYPE_SIX]);
-		}
 	}
 
 	ticks_timer = time_get_impl();

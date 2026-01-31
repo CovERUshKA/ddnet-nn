@@ -156,4 +156,5 @@ struct ModelManager
 	bool ResetBotMemory(int bot_id);
 	// Reset memory of all bots
 	bool ResetAllBotsMemory();
+	void ResetCUDAGraph();
 };

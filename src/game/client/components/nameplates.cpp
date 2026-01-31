@@ -282,6 +282,15 @@ void CNamePlates::OnRender()
 			continue;
 		}
 
+		// Don't render nameplate in other teams in demo if cl_show_others = 2
+		if(Client()->State() == IClient::STATE_DEMOPLAYBACK
+			&& m_pClient->m_Snap.m_SpecInfo.m_SpectatorID != SPEC_FREEVIEW
+			&& g_Config.m_ClShowOthers == 2
+			&& m_pClient->m_Teams.Team(i) != m_pClient->m_Teams.Team(m_pClient->m_Snap.m_SpecInfo.m_SpectatorID))
+		{
+			continue;
+		}
+
 		vec2 *pRenderPos;
 		if(m_pClient->m_aClients[i].m_SpecCharPresent)
 		{

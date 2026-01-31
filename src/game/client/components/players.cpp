@@ -813,6 +813,14 @@ void CPlayers::OnRender()
 		{
 			continue;
 		}
+		// Don't render hooks in other teams in demo if cl_show_others = 2
+		if(Client()->State() == IClient::STATE_DEMOPLAYBACK
+			&& m_pClient->m_Snap.m_SpecInfo.m_SpectatorID != SPEC_FREEVIEW
+			&& g_Config.m_ClShowOthers == 2
+			&& m_pClient->m_Teams.Team(ClientID) != m_pClient->m_Teams.Team(m_pClient->m_Snap.m_SpecInfo.m_SpectatorID))
+		{
+			continue;
+		}
 		RenderHook(&m_pClient->m_aClients[ClientID].m_RenderPrev, &m_pClient->m_aClients[ClientID].m_RenderCur, &m_aRenderInfo[ClientID], ClientID);
 	}
 	if(LocalClientID != -1 && m_pClient->m_Snap.m_aCharacters[LocalClientID].m_Active && IsPlayerInfoAvailable(LocalClientID))
@@ -835,6 +843,15 @@ void CPlayers::OnRender()
 	for(int ClientID = 0; ClientID < MAX_CLIENTS; ClientID++)
 	{
 		if(ClientID == LocalClientID || !m_pClient->m_Snap.m_aCharacters[ClientID].m_Active || !IsPlayerInfoAvailable(ClientID))
+		{
+			continue;
+		}
+
+		// Don't render tees in other teams in demo if cl_show_others = 2
+		if(Client()->State() == IClient::STATE_DEMOPLAYBACK
+			&& m_pClient->m_Snap.m_SpecInfo.m_SpectatorID != SPEC_FREEVIEW
+			&& g_Config.m_ClShowOthers == 2
+			&& m_pClient->m_Teams.Team(ClientID) != m_pClient->m_Teams.Team(m_pClient->m_Snap.m_SpecInfo.m_SpectatorID))
 		{
 			continue;
 		}

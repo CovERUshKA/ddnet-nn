@@ -414,19 +414,19 @@ public:
 	//
 	double get_mae()
 	{
-		double mae = 0.0f;
+		torch::NoGradGuard no_grad;
 
 		// Compute MAE directly without intermediate tensors
-		mae = torch::nn::functional::l1_loss(values, returns, torch::nn::L1LossOptions().reduction(torch::kMean))
+		return torch::nn::functional::l1_loss(values, returns, torch::nn::L1LossOptions().reduction(torch::kMean))
 			      .item<double>();
-
-		return mae;
 	}
 
 	// Correlation coefficient
 	// Between values and actual returns
 	float get_correlation_coefficient()
 	{
+		torch::NoGradGuard no_grad;
+
 		// Ensure inputs are 1D and have the same size
 		if(values.dim() != returns.dim() || returns.size(0) != values.size(0))
 		{
@@ -850,14 +850,17 @@ auto PPO::update(ActorCritic &ac, ActorCritic &ac_work,
 		std::vector<bool> accumulation_resets;
 		std::vector<bool> dones;
 		//printf("Calculating GAE of episodes...");
-		while(replay_buffer->next_episodes(mini_batch_size, states, actions, log_probs, h_lstm, c_lstm, rewards, accumulation_resets, dones))
-		{ 
-			auto [cpy_values, h_out_values, c_out_values] = ac_work->critic_forward(states, h_lstm, c_lstm);
-			cpy_values = cpy_values.detach();
+		{
+			torch::NoGradGuard no_grad;
 
-			auto returns = calculate_returns(rewards, accumulation_resets, dones, cpy_values, gamma, lambda);
+			while(replay_buffer->next_episodes(mini_batch_size, states, actions, log_probs, h_lstm, c_lstm, rewards, accumulation_resets, dones))
+			{
+				auto [cpy_values, h_out_values, c_out_values] = ac_work->critic_forward(states, h_lstm, c_lstm);
 
-			replay_buffer->upload_values_and_returns(cpy_values, returns);
+				auto returns = calculate_returns(rewards, accumulation_resets, dones, cpy_values, gamma, lambda);
+
+				replay_buffer->upload_values_and_returns(cpy_values, returns);
+			}
 		}
 		//printf(" done!\n");
 		stats.critic_mean_absolute_error = replay_buffer->get_mae();
@@ -977,46 +980,51 @@ auto PPO::update(ActorCritic &ac, ActorCritic &ac_work,
 				torch::nn::utils::clip_grad_norm_(ac->parameters(), 0.5f);
 				//torch::nn::utils::clip_grad_norm_(ac->critic_network->parameters(), 0.5f);
 
-				// Compute gradient norms
-				double actor_grad_norm = 0.0;
-				double critic_grad_norm = 0.0;
-				for(const auto &param : ac->actor_parameters())
 				{
-					if(param.grad().defined())
-					{
-						actor_grad_norm += param.grad().norm().item<double>();
-					}
-				}
-				for(const auto &param : ac->critic_parameters())
-				{
-					if(param.grad().defined())
-					{
-						critic_grad_norm += param.grad().norm().item<double>();
-					}
-				}
-				total_actor_grad_norm += actor_grad_norm;
-				total_critic_grad_norm += critic_grad_norm;
+					torch::NoGradGuard no_grad;
 
-				// Compute weight norms
-				double actor_weight_norm = 0.0;
-				double critic_weight_norm = 0.0;
-				for(const auto &param : ac->actor_parameters())
-				{
-					actor_weight_norm += param.norm().item<double>();
-				}
-				for(const auto &param : ac->critic_parameters())
-				{
-					critic_weight_norm += param.norm().item<double>();
-				}
-				total_actor_weight_norm += actor_weight_norm;
-				total_critic_weight_norm += critic_weight_norm;
+					// Compute gradient norms
+					double actor_grad_norm = 0.0;
+					double critic_grad_norm = 0.0;
+					for(const auto &param : ac->actor_parameters())
+					{
+						if(param.grad().defined())
+						{
+							actor_grad_norm += param.grad().norm().item<double>();
+						}
+					}
+					for(const auto &param : ac->critic_parameters())
+					{
+						if(param.grad().defined())
+						{
+							critic_grad_norm += param.grad().norm().item<double>();
+						}
+					}
+					total_actor_grad_norm += actor_grad_norm;
+					total_critic_grad_norm += critic_grad_norm;
 
-				// Compute activation statistics
-				//auto actor_activations = ac->actor_forward(cpy_sta);
-				auto actor_activation_mean = action.mean().item<double>();
-				auto actor_activation_std = action.std().item<double>();
-				total_actor_activation_mean += actor_activation_mean;
-				total_actor_activation_std += actor_activation_std;
+					// Compute weight norms
+					double actor_weight_norm = 0.0;
+					double critic_weight_norm = 0.0;
+					for(const auto &param : ac->actor_parameters())
+					{
+						actor_weight_norm += param.norm().item<double>();
+					}
+					for(const auto &param : ac->critic_parameters())
+					{
+						critic_weight_norm += param.norm().item<double>();
+					}
+					total_actor_weight_norm += actor_weight_norm;
+					total_critic_weight_norm += critic_weight_norm;
+
+					// Compute activation statistics
+					// auto actor_activations = ac->actor_forward(cpy_sta);
+					auto action_detached = action.detach();
+					auto actor_activation_mean = action_detached.mean().item<double>();
+					auto actor_activation_std = action_detached.std().item<double>();
+					total_actor_activation_mean += actor_activation_mean;
+					total_actor_activation_std += actor_activation_std;
+				}
 
 				count_mini_batches_processed += 1;
 				if(count_mini_batches_processed == count_mini_batches)
@@ -1024,11 +1032,6 @@ auto PPO::update(ActorCritic &ac, ActorCritic &ac_work,
 					opt->step();
 					opt->zero_grad();
 
-					// Clamp log_std_ so it will not rise infinetly
-					//{
-					//	//torch::NoGradGuard no_grad; // Disable gradient tracking
-					//	ac->log_std_.clamp_(-3.0, 0); // -3.0 0
-					//}
 					count_mini_batches_processed = 0;
 				}
 				if(ac->actor_network->parameters()[0].isnan().any().item<bool>() || ac->actor_network->parameters()[0].isinf().any().item<bool>())
