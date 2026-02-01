@@ -36,4 +36,13 @@ struct NNStats
 	double max_hook_entropy;
 	double max_hammer_entropy;
 	double max_direction_entropy;
+
+	// Policy Probability Ratio
+	double mean_ratio;
+	double std_ratio;
+	double min_ratio;
+	double max_ratio;
+
+	// Approximate KL Divergence
+	double approx_kl;
 };

@@ -28,9 +28,10 @@ int64_t seq_len = 32;
 int64_t lstm_layers = 1; // 1024 256
 double std_dev = 0.37; // log(0.37) ~ -1
 double learning_rate = 5e-5;
-double actor_learning_rate = 3e-4;
-double log_std_learning_rate = 1e-4;
-double critic_learning_rate = 1e-3;
+double actor_learning_rate = 3e-4; // 3e-4
+double log_std_learning_rate = 1e-4; // 1e-4
+double critic_learning_rate = 1e-3; // 1e-3
+double lstm_learning_rate = 1e-4; // 1e-5
 //double weight_decay = 0.0001;
 
 int64_t mini_batch_size = 8000; // 4096, 8192, 16384, 32768
@@ -130,11 +131,9 @@ void generate_random_hyperparameters()
 
 void ModelManager::ResetCUDAGraph()
 {
-	// Convert input_to_model_id to a tensor for use in the graph
-	auto options = torch::TensorOptions()
-			       .dtype(torch::kInt32);
 	if(!input_to_model_id.empty())
 	{
+		// Convert input_to_model_id to a tensor for use in the graph
 		auto options = torch::TensorOptions()
 				       .dtype(torch::kInt32);
 		torch::Tensor input_to_model_id_tensor = torch::from_blob(input_to_model_id.data(), {static_cast<int>(input_to_model_id.size())}, options).to(device, true);
@@ -220,11 +219,21 @@ ModelManager::ModelManager(bool is_training, std::string train_folder, size_t ba
 			std::make_unique<torch::optim::AdamOptions>(critic_learning_rate)));
 		param_groups.push_back(torch::optim::OptimizerParamGroup({ac_update->log_std_},
 			std::make_unique<torch::optim::AdamOptions>(log_std_learning_rate)));
+		param_groups.push_back(torch::optim::OptimizerParamGroup({ac_update->lstm->parameters()},
+			std::make_unique<torch::optim::AdamOptions>(lstm_learning_rate)));
 
 		opt = std::make_shared<torch::optim::Adam>(param_groups);
 		// scheduler = std::make_shared<torch::optim::ReduceLROnPlateauScheduler>(*opt, /* mode */ torch::optim::ReduceLROnPlateauScheduler::max, /* factor */ 0.5, /* patience */ 10);
 		opt->param_groups()[0].options().set_lr(actor_learning_rate);
 		opt->param_groups()[1].options().set_lr(critic_learning_rate);
+		if(opt->param_groups().size() >= 3)
+		{
+			opt->param_groups()[2].options().set_lr(log_std_learning_rate);
+		}
+		if(opt->param_groups().size() >= 4)
+		{
+			opt->param_groups()[3].options().set_lr(lstm_learning_rate);
+		}
 	}
 
 	//for(auto &param_group : opt->param_groups())
@@ -398,8 +407,18 @@ bool ModelManager::LoadModels(std::string folder_path, std::string main_model_na
 
 	if(is_training)
 	{
-		opt->param_groups()[0].options().set_lr(actor_learning_rate);
-		opt->param_groups()[1].options().set_lr(critic_learning_rate);
+		opt->param_groups()[0].options().set_lr(actor_learning_rate); // Actor
+		opt->param_groups()[1].options().set_lr(critic_learning_rate); // Critic
+		if(opt->param_groups().size() >= 3)
+		{
+			opt->param_groups()[2].options().set_lr(log_std_learning_rate); // Log Std
+		}
+		if(opt->param_groups().size() >= 4)
+		{
+			opt->param_groups()[3].options().set_lr(lstm_learning_rate); // LSTM
+		}
+		/*opt->param_groups().push_back(torch::optim::OptimizerParamGroup({ac_update->lstm->parameters()},
+			std::make_unique<torch::optim::AdamOptions>(lstm_learning_rate)));*/
 	}
 
 	try
@@ -539,7 +558,7 @@ std::vector<ModelOutput> ModelManager::Decide(
 	//int graph_counter = 0;
 	//int graph_main_counter = 0;
 	//printf("C\n");
-	if(!is_training && old_bots_indexes.size())
+	if(is_training && old_bots_indexes.size())
 	{
 		graph_input_tensors.copy_(state_gpu.index_select(0, input_to_model_id_tensor_old_indexes), true);
 		graph_h_input_tensors.copy_(h_lstm_states.index_select(1, input_to_model_id_tensor_old_indexes), true);
@@ -637,11 +656,10 @@ std::vector<ModelOutput> ModelManager::Decide(
 	time_forward = std::chrono::duration<double>(now - measure_time).count() * 1000.;
 	measure_time = std::chrono::high_resolution_clock::now();
 	//printf("1\n");
-	torch::Tensor av_current_sampled, old_current_sampled, old_current;
-	if(graph_output_tensors.size())
+	torch::Tensor av_current_sampled, old_current_sampled;
+	if(old_bots_indexes.size())
 	{
-		old_current = torch::cat(graph_output_tensors, 0);
-		old_current_sampled = process_old_model_batch(old_current);
+		old_current_sampled = process_old_model_batch(graph_output_tensors);
 	}
 
 	av_current_sampled = process_main_network(graph_main_output_tensor);
@@ -654,14 +672,16 @@ std::vector<ModelOutput> ModelManager::Decide(
 	torch::Tensor tActions_sampled = torch::zeros({(int)input_inputs.size(), 5}, device);
 	tActions_original.index_copy_(0, input_to_model_id_tensor_old_indexes, graph_output_tensors);
 	tActions_original.index_copy_(0, input_to_model_id_tensor_current_indexes, graph_main_output_tensor);
+	tActions_sampled.index_copy_(0, input_to_model_id_tensor_old_indexes, old_current_sampled);
+	tActions_sampled.index_copy_(0, input_to_model_id_tensor_current_indexes, av_current_sampled);
 	h_lstm_states.index_copy_(1, input_to_model_id_tensor_old_indexes, graph_h_output_tensors);
 	h_lstm_states.index_copy_(1, input_to_model_id_tensor_current_indexes, graph_h_main_output_tensor);
 	c_lstm_states.index_copy_(1, input_to_model_id_tensor_old_indexes, graph_c_output_tensors);
 	c_lstm_states.index_copy_(1, input_to_model_id_tensor_current_indexes, graph_c_main_output_tensor);
 	
 	// Concatenate all actions into a single tensor
-	auto tActions_original = torch::cat(all_actions_original, 0).reshape({(int)input_inputs.size(), ac_work->n_out});
-	auto tActions_sampled = torch::cat(all_actions_sampled, 0).reshape({(int)input_inputs.size(), 5});
+	/*auto tActions_original = torch::cat(all_actions_original, 0).reshape({(int)input_inputs.size(), ac_work->n_out});
+	auto tActions_sampled = torch::cat(all_actions_sampled, 0).reshape({(int)input_inputs.size(), 5});*/
 	
 	now = std::chrono::high_resolution_clock::now();
 	time_to_cpu = std::chrono::duration<double>(now - measure_time).count() * 1000.;

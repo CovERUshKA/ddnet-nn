@@ -381,10 +381,10 @@ void CNeuralNetwork::OnInit()
 
 	load_model = true;
 	load_previous = true;
-	load_folder_path = "train\\1769840131933";
+	load_folder_path = "train\\1769972351772";
 	load_main_model_name = "last";
 
-	bool record_initial_demo = true;
+	bool record_initial_demo = false;
 
 	const CMapItemLayerTilemap *pTileMap = m_pGameContext->Layers()->GameLayer();
 	const CTile *pTiles = static_cast<CTile *>(Kernel()->RequestInterface<IMap>()->GetData(pTileMap->m_Data));
@@ -596,7 +596,12 @@ void CNeuralNetwork::OnInit()
 					"Maximal Direction entropy",
 					"Count ticks with current",
 					"Count ticks with old",
-					"Time to update"
+					"Time to update",
+					"Mean Ratio",
+					"Std Ratio",
+					"Minimal Ratio",
+					"Maximal Ratio",
+					"Approximate KL Divergence",
 				};
 
 				// Write the CSV header
@@ -1481,10 +1486,17 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 				       << "," << stats.max_hook_entropy
 				       << "," << stats.max_hammer_entropy
 				       << "," << stats.max_direction_entropy
-						// Print count ticks with new/old
+				       // Print count ticks with new/old
 				       << "," << count_ticks_with_current
 				       << "," << count_ticks_with_old
 				       << "," << cumulative_time_to_update
+						// Policy Probability Ratio
+				       << "," << stats.mean_ratio
+				       << "," << stats.std_ratio
+				       << "," << stats.min_ratio
+				       << "," << stats.max_ratio
+				       // Approximate KL Divergence
+				       << "," << stats.approx_kl
 				       << endl;
 				dbg_msg("neuralnetwork",\
 					"Avg. first/second bot score: %f/%f "\

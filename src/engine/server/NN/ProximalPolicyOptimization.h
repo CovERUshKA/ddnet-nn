@@ -827,6 +827,15 @@ auto PPO::update(ActorCritic &ac, ActorCritic &ac_work,
 	torch::Tensor max_hammer_entropy_tensor = torch::zeros({}, torch::kCUDA); // Initialize tensor to accumulate hammer entropy
 	torch::Tensor max_direction_entropy_tensor = torch::zeros({}, torch::kCUDA); // Initialize tensor to accumulate direction entropy
 
+	// Policy Probability Ratio
+	torch::Tensor mean_ratio_tensor = torch::zeros({}, torch::kCUDA);
+	torch::Tensor std_ratio_tensor = torch::zeros({}, torch::kCUDA);
+	torch::Tensor min_ratio_tensor = torch::zeros({}, torch::kCUDA);
+	torch::Tensor max_ratio_tensor = torch::zeros({}, torch::kCUDA);
+
+	// Approximate KL Divergence
+	torch::Tensor approx_kl_tensor = torch::zeros({}, torch::kCUDA);
+
 	auto saved_size = replay_buffer->size();
 	size_t count_updates = 0;
 	int count_mini_batches_processed = 0;
@@ -1151,6 +1160,21 @@ auto PPO::update(ActorCritic &ac, ActorCritic &ac_work,
 				max_hammer_entropy_tensor += hammer_entropy.detach().max();
 				max_direction_entropy_tensor += direction_entropy.detach().max();
 
+				// Policy Probability Ratio
+				mean_ratio_tensor += ratio.detach().mean();
+				std_ratio_tensor += ratio.detach().std();
+				min_ratio_tensor += ratio.detach().min();
+				max_ratio_tensor += ratio.detach().max();
+
+				// Approximate KL Divergence
+				{
+					torch::NoGradGuard no_grad;
+
+					auto approx_kl = (old_log_prob - new_log_prob).detach().mean();
+					//std::cout << approx_kl << std::endl;
+					approx_kl_tensor += approx_kl;
+				}
+
 				count_updates += 1;
 				//c10::cuda::CUDACachingAllocator::emptyCache();
 
@@ -1191,6 +1215,16 @@ auto PPO::update(ActorCritic &ac, ActorCritic &ac_work,
 	stats.max_hook_entropy = max_hook_entropy_tensor.item<double>() / count_updates;
 	stats.max_hammer_entropy = max_hammer_entropy_tensor.item<double>() / count_updates;
 	stats.max_direction_entropy = max_direction_entropy_tensor.item<double>() / count_updates;
+
+	// Policy Probability Ratio
+	stats.mean_ratio = mean_ratio_tensor.item<double>() / count_updates;
+	stats.std_ratio = std_ratio_tensor.item<double>() / count_updates;
+	stats.min_ratio = min_ratio_tensor.item<double>() / count_updates;
+	stats.max_ratio = max_ratio_tensor.item<double>() / count_updates;
+
+	// Approximate KL Divergence
+	//std::cout << approx_kl_tensor.item<double>() << std::endl;
+	stats.approx_kl = approx_kl_tensor.item<double>() / count_updates;
 
 	//std::cout << "Max entropy: " << max_entropy_tensor << std::endl;
 	//std::cout << "Median entropy: " << median_entropy_tensor << std::endl;

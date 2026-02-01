@@ -63,6 +63,8 @@ metrics = [
     ("Critic weight norm", None),
     ("Actor activation mean", None),
     ("Actor activation std", None),
+    (["Mean Ratio", "Std Ratio", "Minimal Ratio", "Maximal Ratio"], None),
+    ("Approximate KL Divergence", None),
     ("Learning rate", None),
     ("Time to update", None)
 ]
