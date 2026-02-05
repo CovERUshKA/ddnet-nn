@@ -43,7 +43,7 @@ metrics = [
     ("Average second bot reward", None),
     ("Average bots reward difference", lambda df: df["Average second bot reward"][1:] - df["Average first bot reward"][1:]),
     ("Highest reward per tick", None),
-    ("Average current-old score difference", lambda df: (df["Current bot cumulative score"][1:] - df["Old bot cumulative score"][1:]) / (df["Count episodes"][1:] / 2)),
+    ("Average current-old score difference", lambda df: (df["Current bot cumulative score"][1:] - df["Old bot cumulative score"][1:]) / df["Count episodes with old"][1:]),
     ("Actor loss", None),
     ("Critic loss", None),
     ("Critic Mean Absolute Error", None),

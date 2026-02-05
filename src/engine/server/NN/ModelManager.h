@@ -114,6 +114,7 @@ struct ModelManager
 	ModelManager(bool is_training, std::string train_folder, size_t batch_size, size_t count_players, uint64_t seed);
 
 	bool LoadModels(std::string folder_path, std::string main_model_name, bool load_previous);
+	bool ReloadCachedModels();
 
 	//ModelOutput Decide(ModelInputInputs &input);
 	std::vector<ModelOutput> Decide(

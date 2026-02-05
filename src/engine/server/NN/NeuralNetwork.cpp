@@ -39,6 +39,8 @@ CGameContext *m_pGameContext;
 CCollision *m_pCollision;
 CGameControllerDDRace *m_pController;
 
+std::ofstream stats_logger;
+
 float volleyball_net_height = 9 * 32.f;
 
 vec2 left_spawn_pos = {162.5 * 32.f, 100.5 * 32.f};
@@ -90,6 +92,12 @@ bool GetEnemyAndBallId(int ClientID, int Team, int& enemy_id, int& ball_id) {
 	return count_found == 2;
 }
 
+bool InTheVolleyballArea(vec2 position)
+{
+	return position.x >= volleyball_area_start.x && position.x <= volleyball_area_end.x &&
+		   position.y >= volleyball_area_start.y && position.y <= volleyball_area_end.y;
+}
+
 //CPlayer *CNeuralNetwork::GetEmptyTeam(int ClientID)
 //{
 //	return m_pGameContext->m_apPlayers[ClientID];
@@ -102,7 +110,7 @@ CPlayer *CNeuralNetwork::AddBot(std::string name, vec2 spawn_pos = {0,0})
 		if(m_pServer->m_aClients[ClientID].m_State == CServer::CClient::STATE_EMPTY)
 		{
 			// m_aClients[ClientID].m_aName = "Bot";
-			memcpy(m_pServer->m_aClients[ClientID].m_aName, name.c_str(), name.length() + 1);
+			memcpy_s(m_pServer->m_aClients[ClientID].m_aName, 16, name.c_str(), name.length() + 1);
 
 			m_pServer->m_aClients[ClientID].m_State = CServer::CClient::STATE_INGAME;
 			m_pServer->m_aClients[ClientID].m_SnapRate = CServer::CClient::SNAPRATE_FULL;
@@ -205,9 +213,12 @@ void CNeuralNetwork::RespawnTeam(int Team)
 
 	for(size_t i = 0; i < 3; i++)
 	{
-		auto bot = vBots[(Team - 1) * 3 + i];
+		auto bot_id = (Team - 1) * 3 + i;
+		auto bot = vBots[bot_id];
 
 		bot->KillCharacter();
+
+		vLastCharacterState[bot_id].Reset();
 
 		vec2 spawn_pos;
 
@@ -249,6 +260,7 @@ void CNeuralNetwork::RespawnTeam(int Team)
 			string path_demo = "train/" + dir_name + "/demos/" + aFilename;
 			int ret = m_pServer->m_aDemoRecorder[i].Start(m_pStorage, m_pConsole, path_demo.c_str(), m_pGameContext->NetVersion(), m_pServer->m_aCurrentMap, &m_pServer->m_aCurrentMapSha256[CServer::MAP_TYPE_SIX], m_pServer->m_aCurrentMapCrc[CServer::MAP_TYPE_SIX], "server", m_pServer->m_aCurrentMapSize[CServer::MAP_TYPE_SIX], m_pServer->m_apCurrentMapData[CServer::MAP_TYPE_SIX]);
 		}*/
+		vBotRewards[bot_id] = 0;
 	}
 	m_pController->m_Teams.ResetRoundState(Team);
 	// Start
@@ -381,10 +393,10 @@ void CNeuralNetwork::OnInit()
 
 	load_model = true;
 	load_previous = true;
-	load_folder_path = "train\\1769972351772";
+	load_folder_path = "train\\1769982442849_interesting_new_finding";
 	load_main_model_name = "last";
 
-	bool record_initial_demo = false;
+	bool record_initial_demo = true;
 
 	const CMapItemLayerTilemap *pTileMap = m_pGameContext->Layers()->GameLayer();
 	const CTile *pTiles = static_cast<CTile *>(Kernel()->RequestInterface<IMap>()->GetData(pTileMap->m_Data));
@@ -395,41 +407,121 @@ void CNeuralNetwork::OnInit()
 	{
 		// printf("Creating train directory with folders...\n");
 		dbg_msg("neuralnetwork", "Creating train directory with folders...");
-
-		if(fs_makedir("train") != 0)
+		try
 		{
-			dbg_msg("neuralnetwork", "Can't make train directory");
+			if(fs_makedir("train") != 0)
+				throw exception("Can't make train directory");
+
+			if(fs_makedir((string("train\\") + dir_name).c_str()) != 0)
+				throw exception("Can't make dir for this learning directory");
+
+			if(fs_makedir(string("train\\" + dir_name + "\\models").c_str()) != 0)
+				throw exception("Can't make models directory");
+
+			if(fs_makedir(string("train\\" + dir_name + "\\models\\previous").c_str()) != 0)
+				throw exception("Can't make previous models directory");
+
+			if(fs_makedir(string("train\\" + dir_name + "\\demos").c_str()) != 0)
+				throw exception("Can't make demos directory");
+
+			if(load_model && fs::exists(load_folder_path + "\\stats.csv"))
+			{
+				dbg_msg("neuralnetwork", "Copying stats file from load folder...");
+				fs::copy_file(load_folder_path + "\\stats.csv", "train\\" + dir_name + "\\stats.csv");
+				stats_logger.open("train\\" + dir_name + "\\stats.csv", std::ios_base::app);
+				dbg_msg("neuralnetwork", "Stats file copied.");
+			}
+			else
+			{
+				dbg_msg("neuralnetwork", "Creating data.csv file for statistics...");
+				{
+					stats_logger.open("train\\" + dir_name + "\\stats.csv");
+
+					// Define the CSV header using a vector
+					std::vector<std::string> header_columns = {
+						"Count episodes",
+						"Count episodes with old",
+						"Cumulative ball hits",
+						"First bot cumulative score",
+						"Second bot cumulative score",
+						"Current bot cumulative score",
+						"Old bot cumulative score",
+						"Average freeze time",
+						"Average ball absolute velocity",
+						"Average ball velocity(x)",
+						"Average first bot reward",
+						"Average second bot reward",
+						"Highest reward per tick",
+						"TPS",
+						"Training loss",
+						"Actor loss",
+						"Critic loss",
+						"Critic Mean Absolute Error",
+						"Critic Correlation Coefficient",
+						"Entropy",
+						"Angle entropy",
+						"Hook entropy",
+						"Hammer entropy",
+						"Direction entropy",
+						"Entropy coefficient",
+						"Actor grad norm",
+						"Critic grad norm",
+						"Actor weight norm",
+						"Critic weight norm",
+						"Actor activation mean",
+						"Actor activation std",
+						"Learning rate",
+						"Time since start",
+						"Time to decide",
+						"Time to tick",
+						"Time rest",
+						"Time pre forward",
+						"Time forward",
+						"Time normal",
+						"Time to cpu",
+						"Time process last",
+						"Minimal Entropy",
+						"Minimal Angle entropy",
+						"Minimal Hook entropy",
+						"Minimal Hammer entropy",
+						"Minimal Direction entropy",
+						"Maximal Entropy",
+						"Maximal Angle entropy",
+						"Maximal Hook entropy",
+						"Maximal Hammer entropy",
+						"Maximal Direction entropy",
+						"Count ticks with current",
+						"Count ticks with old",
+						"Time to update",
+						"Mean Ratio",
+						"Std Ratio",
+						"Minimal Ratio",
+						"Maximal Ratio",
+						"Approximate KL Divergence",
+					};
+
+					// Write the CSV header
+					for(size_t i = 0; i < header_columns.size(); ++i)
+					{
+						stats_logger << header_columns[i];
+						if(i < header_columns.size() - 1)
+						{
+							stats_logger << ","; // Add a comma between columns
+						}
+					}
+					stats_logger << endl;
+				}
+
+				dbg_msg("neuralnetwork", "data.csv file created and initialized.");
+			}
+		}
+		catch(const std::exception &e)
+		{
+			dbg_msg("neuralnetwork", e.what());
 			system("PAUSE");
 			exit(1);
 		}
 
-		if(fs_makedir((string("train\\") + dir_name).c_str()) != 0)
-		{
-			dbg_msg("neuralnetwork", "Can't make dir for this learning directory");
-			system("PAUSE");
-			exit(1);
-		}
-
-		if(fs_makedir(string("train\\" + dir_name + "\\models").c_str()) != 0)
-		{
-			dbg_msg("neuralnetwork", "Can't make models directory");
-			system("PAUSE");
-			exit(1);
-		}
-
-		if(fs_makedir(string("train\\" + dir_name + "\\models\\previous").c_str()) != 0)
-		{
-			dbg_msg("neuralnetwork", "Can't make previous models directory");
-			system("PAUSE");
-			exit(1);
-		}
-
-		if(fs_makedir(string("train\\" + dir_name + "\\demos").c_str()) != 0)
-		{
-			dbg_msg("neuralnetwork", "Can't make demos directory");
-			system("PAUSE");
-			exit(1);
-		}
 		dbg_msg("neuralnetwork", "Train directory with folders created: %s.", ("train\\" + dir_name).c_str());
 	}
 
@@ -479,7 +571,9 @@ void CNeuralNetwork::OnInit()
 		{
 			// vBotLastPos.resize(count_player_bots);
 			// vBotLastVel.resize(count_player_bots);
+			vBotRewards.assign(count_bots, 0);
 			vBallLastPos.resize(count_teams);
+			vLastCharacterState.resize(count_bots);
 			vInputInputs.resize(count_player_bots);
 			// vInputBlocks.resize(count_bots);
 			vOutputs.resize(count_player_bots);
@@ -524,100 +618,6 @@ void CNeuralNetwork::OnInit()
 		}
 
 		dbg_msg("neuralnetwork", "Bots added");
-	}
-
-	if(is_training)
-	{
-		if(load_model && fs::exists(load_folder_path + "\\stats.csv"))
-		{
-			dbg_msg("neuralnetwork", "Copying stats file from load folder...");
-			fs::copy_file(load_folder_path + "\\stats.csv", "train\\" + dir_name + "\\stats.csv");
-			logger.open("train\\" + dir_name + "\\stats.csv", std::ios_base::app);
-			dbg_msg("neuralnetwork", "Stats file copied.");
-		}
-		else
-		{
-			dbg_msg("neuralnetwork", "Creating data.csv file for statistics...");
-			{
-				logger.open("train\\" + dir_name + "\\stats.csv");
-
-				// Define the CSV header using a vector
-				std::vector<std::string> header_columns = {
-					"Count episodes",
-					"Count episodes with old",
-					"Cumulative ball hits",
-					"First bot cumulative score",
-					"Second bot cumulative score",
-					"Current bot cumulative score",
-					"Old bot cumulative score",
-					"Average freeze time",
-					"Average ball absolute velocity",
-					"Average ball velocity(x)",
-					"Average first bot reward",
-					"Average second bot reward",
-					"Highest reward per tick",
-					"TPS",
-					"Training loss",
-					"Actor loss",
-					"Critic loss",
-					"Critic Mean Absolute Error",
-					"Critic Correlation Coefficient",
-					"Entropy",
-					"Angle entropy",
-					"Hook entropy",
-					"Hammer entropy",
-					"Direction entropy",
-					"Entropy coefficient",
-					"Actor grad norm",
-					"Critic grad norm",
-					"Actor weight norm",
-					"Critic weight norm",
-					"Actor activation mean",
-					"Actor activation std",
-					"Learning rate",
-					"Time since start",
-					"Time to decide",
-					"Time to tick",
-					"Time rest",
-					"Time pre forward",
-					"Time forward",
-					"Time normal",
-					"Time to cpu",
-					"Time process last",
-					"Minimal Entropy",
-					"Minimal Angle entropy",
-					"Minimal Hook entropy",
-					"Minimal Hammer entropy",
-					"Minimal Direction entropy",
-					"Maximal Entropy",
-					"Maximal Angle entropy",
-					"Maximal Hook entropy",
-					"Maximal Hammer entropy",
-					"Maximal Direction entropy",
-					"Count ticks with current",
-					"Count ticks with old",
-					"Time to update",
-					"Mean Ratio",
-					"Std Ratio",
-					"Minimal Ratio",
-					"Maximal Ratio",
-					"Approximate KL Divergence",
-				};
-
-				// Write the CSV header
-				for(size_t i = 0; i < header_columns.size(); ++i)
-				{
-					logger << header_columns[i];
-					if(i < header_columns.size() - 1)
-					{
-						logger << ","; // Add a comma between columns
-					}
-				}
-				logger << endl;
-			}
-			dbg_msg("neuralnetwork", "data.csv file created and initialized.");
-		}
-		
 	}
 
 	ticks_timer = time_get_impl();
@@ -705,6 +705,9 @@ void CNeuralNetwork::PreTick()
 			}
 
 			bot_character_core = bot_character->Core();
+
+			// Save character state
+			vLastCharacterState[i].m_FreezeTime = bot_character->m_FreezeTime;
 
 			int enemy_id = i % 3 == 0 ? i + 1 : i - 1;
 			int ball_id = i % 3 == 0 ? i + 2 : i + 1;
@@ -1026,6 +1029,7 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 	static int count_updated = 0;
 
 	// Rewards
+	static float last_touch_goal_window = 2.5f; // If the goal was scored in 2 seconds after touching the ball - goal reward is applied
 	static float goal_reward = 10.f; // Rewards when scoring a goal
 	static float goal_penalize_reward = -6.f; // Penalizes if goaled on your side
 
@@ -1033,27 +1037,29 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 	static float ball_on_center_spawn_reward = -0.3f; // -0.1f Center(at the start). This penalizes if both agents dont touch ball and it stays at spawn
 	static float ball_on_side_spawn_reward = -0.05f; // -0.1f There are 2 spawns. left side and right side. This penalizes if agents dont touch ball on their side spawn and it stays at spawn
 
-	static float ball_on_side_reward = 0.1f; // 0.1f If the ball is on your side it penalizes you, otherwise rewards you
-	static float ball_on_side_distance_reward = 0.1f; // 0.1f It means that if the ball is on your side and far from the net it always penalize you on that reward, if ball is half closer to net it penalize on half, but if on enemy side it rewards
+	static float ball_on_side_reward = 0.02f; // 0.1f If the ball is on your side it penalizes you, otherwise rewards you
+	static float ball_on_side_distance_reward = 0.f; // 0.1f It means that if the ball is on your side and far from the net it always penalize you on that reward, if ball is half closer to net it penalize on half, but if on enemy side it rewards
 
 	// Hard to implement ideal finding distance from ball to goal
 	static float ball_moving_towards_net_reward = 0.5f; // 0.2f 10 If the ball is on your side it rewards for moving towards net, otherwise penalize. For example if ball moves from the farthest point to net in summ it would be this reward, so it calculates delta of moving to the net in %
-	static float ball_moving_towards_goal_reward = 0.5f; // 0.2f 10 On the enemy side it rewards if ball is moving toward goal
+	static float ball_moving_towards_goal_reward = 0.5f; // 0.2f 10 On the enemy side it rewards if ball is moving toward goal, reverse on our side
+	static float ball_moving_towards_near_goal_reward = 4.f; // 4.f On the enemy side it rewards if ball is moving toward goal in the near goal area(7 blocks), reverse on our side
 
-	static float being_in_freeze_reward = -0.2f; // -0.1f if the bot is currently freezed it penalizes you on that reward
+	static float being_in_freeze_reward = -0.2f; // -0.2f if the bot is currently freezed it penalizes you on that reward every tick
+	static float got_in_freeze_reward = -2.f; // -2.f If the bot got in freeze - it penalizes it once when it got in freeze
 	static float bot_is_grabbed_reward = 0.05f; // If the bot is currently grabbed to wall/ball applies to every tick
-	static float bot_hooked_ball_reward = 1.f; // If the bot regained control of the ball. Applied on the first tick when ball is hooked by the bot
-	static float bot_is_holding_ball_reward = 0.1f; // If the bot is currently holding ball using hook it rewards every tick
+	static float bot_hooked_ball_reward = 0.5f; // If the bot regained control of the ball. Applied on the first tick when ball is hooked by the bot
+	static float bot_is_holding_ball_reward = 0.05f; // If the bot is currently holding ball using hook it rewards every tick
 	static float bot_moving_towards_ball_reward = 0.1f; // Not implemented
-	static float bot_hitted_ball_reward = 0.5f; // Rewards bot for hitting ball
+	static float bot_hitted_ball_reward = 0.3f; // Rewards bot for hitting ball
 
 	// Misses
 	static float bot_hammer_missed_reward = -0.2f; // Applies when bots hammer not hitted anything
 	static float bot_hook_missed_reward = -0.5f; // Applies when bots hook not hitted anything and it is retracting back to the bot
 
-	static float bot_teleported_reward = -1.f; // Applies when bot teleported with ground teleporter
+	static float bot_teleported_reward = -1.f; // -1 Applies when bot teleported with ground teleporter
 	static float step_reward = -0.02f; // -0.001f Applies every tick
-	static float divide_reward_by = 10.f;
+	static float divide_reward_by = 10.f; // Final reward is divided by this value
 
 	static int force_stop_tick = 2000; // 2000 * skip_tick(3) / 10 = 600 seconds = 10 minutes. 10 minutes to play. If more than this - force stop.
 
@@ -1070,6 +1076,8 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 	auto measure_rest = std::chrono::high_resolution_clock::now();
 	if(m_pServer->Tick() % skip_tick == 0)
 	{
+		auto demo_recorder = &m_pServer->m_aDemoRecorder[MAX_CLIENTS];
+
 		for(size_t team_id = 0; team_id < count_teams && IsTraining(); team_id++)
 		{
 			bool match_is_done = false;
@@ -1109,7 +1117,11 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 					first_bot_reward += goal_penalize_reward;
 					/*if(vBallControl[team_id] == 2)
 					{*/
-					second_bot_reward += goal_reward;
+					if(m_pServer->Tick() - vLastCharacterState[second_bot_id].m_LastTickTouchedBallSinceScored < m_pServer->TickSpeed() * last_touch_goal_window)
+					{
+						second_bot_reward += goal_reward;
+						vLastCharacterState[second_bot_id].ScoredGoal();
+					}
 					//}
 					vBallControl[team_id] = 1;
 					second_bot_cumulative_score += 1;
@@ -1125,7 +1137,11 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 				{
 					/*if(vBallControl[team_id] == 1)
 					{*/
-					first_bot_reward += goal_reward;
+					if(m_pServer->Tick() - vLastCharacterState[first_bot_id].m_LastTickTouchedBallSinceScored < m_pServer->TickSpeed() * last_touch_goal_window)
+					{
+						first_bot_reward += goal_reward;
+						vLastCharacterState[first_bot_id].ScoredGoal();
+					}
 					//}
 					second_bot_reward += goal_penalize_reward;
 					vBallControl[team_id] = 2;
@@ -1174,6 +1190,7 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 			{
 				first_bot_character->m_HittedBall = false;
 				first_bot_reward += bot_hitted_ball_reward;
+				vLastCharacterState[first_bot_id].TouchedBall(m_pServer->Tick());
 				cumulative_ball_hits += 1;
 				vLastTouchedBall[team_id] = 1;
 			}
@@ -1190,6 +1207,7 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 				second_bot_character->m_HittedBall = false;
 				second_bot_reward += bot_hitted_ball_reward;
 				cumulative_ball_hits += 1;
+				vLastCharacterState[second_bot_id].TouchedBall(m_pServer->Tick());
 				vLastTouchedBall[team_id] = 2;
 			}
 
@@ -1210,6 +1228,7 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 					}
 					vLastTouchedBall[team_id] = 1;
 				}
+				vLastCharacterState[first_bot_id].TouchedBall(m_pServer->Tick());
 			}
 
 			if (second_bot_character->GetCore().m_HookedPlayer && second_bot_character->GetCore().m_HookedPlayer % 3 == 2)
@@ -1223,10 +1242,23 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 					}
 					vLastTouchedBall[team_id] = 2;
 				}
+				vLastCharacterState[second_bot_id].TouchedBall(m_pServer->Tick());
 			}
 
+			// Penalize bot for being in freeze
 			first_bot_reward += first_bot_character->m_FreezeTime ? being_in_freeze_reward : 0;
 			second_bot_reward += second_bot_character->m_FreezeTime ? being_in_freeze_reward : 0;
+
+			// Penalize bot for getting in freeze once
+			if(InTheVolleyballArea(first_bot_character->m_Pos) && first_bot_character->m_FreezeTime && !vLastCharacterState[first_bot_id].m_FreezeTime)
+			{
+				first_bot_reward += got_in_freeze_reward;
+			}
+
+			if(InTheVolleyballArea(second_bot_character->m_Pos) && second_bot_character->m_FreezeTime && !vLastCharacterState[second_bot_id].m_FreezeTime)
+			{
+				second_bot_reward += got_in_freeze_reward;
+			}
 
 			if(IsSwitchEnabled(4, team_id + 1) 
 				|| (vTeamTickCounter[team_id] >= force_stop_tick && ((!team_with_old && current_old_shuffle_counter > 0) || (team_with_old && current_old_shuffle_counter == 0))))
@@ -1253,7 +1285,7 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 			}
 			else
 			{
-				if(ball_pos.x > volleyball_area_start.x && ball_pos.y > volleyball_area_start.y && ball_pos.x < volleyball_area_end.x && ball_pos.y < volleyball_area_end.y)
+				if(InTheVolleyballArea(ball_pos))
 				{
 					/*if(ball_character->Core()->m_Vel.y < -2)
 					{
@@ -1274,18 +1306,16 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 						std::cout << ball_to_line_distance_normalized << std::endl;
 					}
 
+					// Check whether the last position of the ball was also in the volleyball area
 					vec2 ball_last_pos = vBallLastPos[team_id];
-					if(ball_last_pos.x > volleyball_area_start.x \
-						&& ball_last_pos.y > volleyball_area_start.y \
-						&& ball_last_pos.x < volleyball_area_end.x \
-						&& ball_last_pos.y < volleyball_area_end.y)
+					if(InTheVolleyballArea(ball_last_pos))
 					{
 						/*if(ball_last_pos.x > volleyball_area_center.x && ball_pos.x < volleyball_area_center.x)
 							vBallControl[team_id] = 2;
 						else if (ball_last_pos.x < volleyball_area_center.x && ball_pos.x > volleyball_area_center.x)
 							vBallControl[team_id] = 1;*/
 						float ball_to_line_last_distance_normalized = ClosestDistanceToDividingLine(ball_last_pos) / sqrtf(pow(13.5f, 2) + pow(9, 2)) / 32.f;
-						float ball_to_goal_distance_normalized = (abs(ball_last_pos.y - 118.5f * 32.f) - abs(ball_pos.y - 118.5f * 32.f)) / 32.f / 20.f;
+						float ball_to_goal_distance_normalized = (ball_pos.y - ball_last_pos.y) / 32.f / 20.f;
 						float distance_change_reward = (ball_to_line_last_distance_normalized - ball_to_line_distance_normalized) * ball_moving_towards_net_reward;
 						float distance_to_goal_reward = ball_to_goal_distance_normalized * ball_moving_towards_goal_reward;
 
@@ -1298,6 +1328,33 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 						{
 							first_bot_reward += distance_to_goal_reward;
 							second_bot_reward += distance_change_reward;
+						}
+
+						if(ball_pos.y > 111.f * 32.f)
+						{
+							// Calculate distance when ball is on the near goal side
+							float ball_to_near_goal_distance_normalized = (ball_pos.y - ball_last_pos.y) / 32.f / 7.f;
+							float distance_to_near_goal_reward = ball_to_near_goal_distance_normalized * ball_moving_towards_near_goal_reward;
+							float own_score_factor = abs(goal_penalize_reward / goal_reward);
+
+							if(ball_pos.x < volleyball_area_center.x)
+							{
+								first_bot_reward -= distance_to_near_goal_reward * own_score_factor;
+								if(m_pServer->Tick() - vLastCharacterState[second_bot_id].m_LastTickTouchedBallSinceScored < m_pServer->TickSpeed() * last_touch_goal_window)
+								{
+									second_bot_reward += distance_to_near_goal_reward;
+								}
+							}
+							else if(ball_pos.x > volleyball_area_center.x)
+							{
+								second_bot_reward -= distance_to_near_goal_reward * own_score_factor;
+
+								if(m_pServer->Tick() - vLastCharacterState[first_bot_id].m_LastTickTouchedBallSinceScored < m_pServer->TickSpeed() * last_touch_goal_window)
+								{
+									first_bot_reward += distance_to_near_goal_reward;
+								}
+							}
+
 						}
 					}
 					//std::cout << ball_to_line_distance_normalized << std::endl;
@@ -1341,6 +1398,29 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 			if(second_bot_reward > highest_reward_per_tick)
 				highest_reward_per_tick = second_bot_reward;
 
+			vBotRewards[first_bot_id] += first_bot_reward;
+			vBotRewards[second_bot_id] += second_bot_reward;
+
+			if (demo_recorder->IsRecording())
+			{
+				//printf("1");
+				std::string first_bot_name = "Bot" + to_string(first_bot_id) + " " + to_string(vBotRewards[first_bot_id]);
+				//printf("2");
+
+				std::string second_bot_name = "Bot" + to_string(second_bot_id) + " " + to_string(vBotRewards[second_bot_id]);
+				//printf("3");
+				
+				//std::cout << first_bot_name << "    " << second_bot_name << std::endl;
+				//printf("4");
+
+				memcpy_s(m_pServer->m_aClients[vBots[first_bot_id]->GetCID()].m_aName, 16, first_bot_name.c_str(), min((int)first_bot_name.length(), 16));
+				//printf("5");
+
+				memcpy_s(m_pServer->m_aClients[vBots[second_bot_id]->GetCID()].m_aName, 16, second_bot_name.c_str(), min((int)second_bot_name.length(), 16));
+				//printf("6\n");
+
+			}
+
 			first_bot_cumulative_reward += first_bot_reward;
 			second_bot_cumulative_reward += second_bot_reward;
 			model_manager->Reward(first_bot_reward / divide_reward_by, false, match_is_done);
@@ -1366,8 +1446,6 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 			float avg_freeze_time = freeze_cumulative_time / ((float)(m_pServer->Tick() - last_update_tick) / (float)skip_tick) / (float)count_player_bots;
 			float avg_ball_abs_vel = cumulative_ball_abs_speed / ((float)(m_pServer->Tick() - last_update_tick) / (float)skip_tick);
 			float avg_ball_vel_x = cumulative_ball_speed_x / ((float)(m_pServer->Tick() - last_update_tick) / (float)skip_tick);
-
-			auto demo_recorder = &m_pServer->m_aDemoRecorder[MAX_CLIENTS];
 
 			if(demo_recorder->IsRecording() && IsTraining())
 			{
@@ -1433,7 +1511,7 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 
 				model_manager->Save("train\\" + dir_name + "\\models\\last");
 
-				logger << count_episodes
+				stats_logger << count_episodes
 				       << "," << count_episodes_with_old
 				       << "," << cumulative_ball_hits
 				       << "," << first_bot_cumulative_score

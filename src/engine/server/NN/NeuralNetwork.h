@@ -10,6 +10,40 @@
 #include <fstream>
 #include <deque>
 
+struct CharacterState
+{
+	int m_FreezeTime;
+	// When the bot hooked the ball last time
+	int m_LastTickTouchedBall;
+	// When the bot hooked the ball last time since scored a goal
+	int m_LastTickTouchedBallSinceScored;
+
+	CharacterState()
+	{
+		this->m_FreezeTime = 0;
+		this->m_LastTickTouchedBall = -1000;
+		this->m_LastTickTouchedBallSinceScored = -1000;
+	}
+
+	void ScoredGoal()
+	{
+		this->m_LastTickTouchedBallSinceScored = -1000;
+	}
+
+	void TouchedBall(int tick)
+	{
+		this->m_LastTickTouchedBall = tick;
+		this->m_LastTickTouchedBallSinceScored = tick;
+	}
+
+	void Reset()
+	{
+		this->m_FreezeTime = 0;
+		this->m_LastTickTouchedBall = -1000;
+		this->m_LastTickTouchedBallSinceScored = -1000;
+	}
+};
+
 class CNeuralNetwork : public IInterface
 {
 	MACRO_INTERFACE("neuralnetwork", 0)
@@ -39,6 +73,8 @@ class CNeuralNetwork : public IInterface
 	std::vector<CPlayer *> vBots;
 	//std::vector<vec2> vBotLastPos;
 	std::vector<vec2> vBallLastPos;
+	std::vector<CharacterState> vLastCharacterState;
+	std::vector<float> vBotRewards;
 	//std::vector<float> vBotLastVel;
 	//std::vector<int> vBotsSpawnPos;
 	//std::vector<float> vBotsCumulativeRewardBetweenSkipTick;
@@ -58,8 +94,6 @@ class CNeuralNetwork : public IInterface
 
 	// train directory name
 	std::string dir_name;
-
-	std::ofstream logger;
 
 	std::chrono::high_resolution_clock::time_point decide_time;
 	float cumulative_time_to_update;

@@ -356,53 +356,20 @@ bool ModelManager::LoadModels(std::string folder_path, std::string main_model_na
 			return false;
 		}
 
-		// Vector to store .pt files
-		std::vector<fs::directory_entry> model_files;
-
 		// Iterate over all files in the folder
 		for(const auto &entry : fs::directory_iterator(previous_models_folder))
 		{
+			std::string model_filename = entry.path().filename().string();
+			std::string model_path = previous_models_folder + "\\" + model_filename;
+			std::string new_model_path = new_models_folder + "\\" + model_filename;
 			// Check if the file is a regular file and has a .pt extension
 			if(entry.is_regular_file() && entry.path().extension() == ".pt")
 			{
-				model_files.push_back(entry);
-			}
-		}
-
-		// Sort files by last modification time (oldest first)
-		std::sort(model_files.begin(), model_files.end(), compare_by_modification_time);
-
-		// Iterate over all files in the folder
-		for(const auto& entry : model_files)
-		{
-			// Check if the file is a regular file and has a .pt extension
-			if(entry.is_regular_file() && entry.path().extension() == ".pt")
-			{
-				std::string model_filename = entry.path().filename().string();
-				std::string model_path = previous_models_folder + "\\" + model_filename;
-				std::string new_model_path = new_models_folder + "\\" + model_filename;
-
-				ActorCritic old_model;
-				old_model->Initialize(n_in, n_out, h_start, h_lstm, lstm_layers, std_dev);
-				torch::load(old_model, model_path);
-				old_model->eval();
-				//old_model->copy_from(ac_update.get());
-				old_model->to(device);
-				old_ac.push_back(old_model);
 				fs::copy_file(model_path, new_model_path);
-				if(old_ac.size() == count_cached_old_models)
-				{
-					break;
-				}
 			}
 		}
 
-		if(!old_ac.empty())
-		{
-			ReassignOldModels();
-		}
-
-		std::cout << "Number of old models loaded: " << old_ac.size() << std::endl;
+		ReloadCachedModels();
 	}
 
 	if(is_training)
@@ -431,6 +398,74 @@ bool ModelManager::LoadModels(std::string folder_path, std::string main_model_na
 		std::cout << "ac_work->copy_from crashed with reason: " << e.what() << std::endl;
 		system("PAUSE");
 		exit(1);
+	}
+
+	return true;
+}
+
+bool ModelManager::ReloadCachedModels()
+{
+	if(is_training)
+	{
+		std::string previous_models_folder = train_folder + "\\models\\previous";
+
+		// Check if the folder exists
+		if(!fs::exists(previous_models_folder))
+		{
+			std::cerr << "The folder '" << previous_models_folder << "' does not exist." << std::endl;
+			system("PAUSE");
+			exit(1);
+			return false;
+		}
+
+		old_ac.clear();
+
+		// Vector to store .pt files
+		std::vector<fs::directory_entry> model_files;
+
+		// Iterate over all files in the folder
+		for(const auto &entry : fs::directory_iterator(previous_models_folder))
+		{
+			// Check if the file is a regular file and has a .pt extension
+			if(entry.is_regular_file() && entry.path().extension() == ".pt")
+			{
+				model_files.push_back(entry);
+			}
+		}
+
+		// Sort files by last modification time (oldest first)
+		//std::sort(model_files.begin(), model_files.end(), compare_by_modification_time);
+
+		// Randomly shuffle model files
+		// TODO: Implement seed control for reproducibility
+		std::random_device rd;
+		std::mt19937 gen(rd());
+		std::shuffle(model_files.begin(), model_files.end(), gen);
+
+		// Iterate over all files in the folder
+		for(const auto &entry : model_files)
+		{
+			std::string model_filename = entry.path().filename().string();
+			std::string model_path = previous_models_folder + "\\" + model_filename;
+
+			ActorCritic old_model;
+			old_model->Initialize(n_in, n_out, h_start, h_lstm, lstm_layers, std_dev);
+			torch::load(old_model, model_path);
+			old_model->eval();
+			old_model->to(device);
+			old_ac.push_back(old_model);
+			if(old_ac.size() == count_cached_old_models)
+			{
+				break;
+			}
+		}
+
+		if(!old_ac.empty())
+		{
+			ReassignOldModels();
+		}
+
+		std::cout << "Number of old models reloaded: " << old_ac.size() << std::endl;
 	}
 
 	return true;
@@ -858,7 +893,6 @@ void ModelManager::ReassignOldModels()
 	}
 
 	
-	ResetAllBotsMemory();
 	ResetCUDAGraph();
 
 	return;
@@ -900,13 +934,8 @@ void ModelManager::Update(double avg_reward, bool cache_model, bool &updated,
 		old_model->Initialize(n_in, n_out, h_start, h_lstm, lstm_layers, std_dev);
 		old_model->copy_from(ac_update.get());
 		old_model->eval();
-		old_ac.push_back(old_model);
 		std::string file_name = to_string(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count());
 		torch::save(ac_update, train_folder + "\\models\\previous\\" + file_name + "_model.pt");
-		if(old_ac.size() > count_cached_old_models)
-		{
-			old_ac.pop_front();
-		}
 	}
 
 	try
@@ -926,7 +955,11 @@ void ModelManager::Update(double avg_reward, bool cache_model, bool &updated,
 	/*ent_coef -=  (1e-2 - min_ent_coef) / 300.;
 	ent_coef = std::max(min_ent_coef, ent_coef);*/
 
-	if(!old_ac.empty())
+	if(cache_model)
+	{
+		ReloadCachedModels();
+	}
+	else if(!old_ac.empty())
 	{
 		ReassignOldModels();
 	}
