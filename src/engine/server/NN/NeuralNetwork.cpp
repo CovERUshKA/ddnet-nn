@@ -1117,7 +1117,9 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 					first_bot_reward += goal_penalize_reward;
 					/*if(vBallControl[team_id] == 2)
 					{*/
-					if(m_pServer->Tick() - vLastCharacterState[second_bot_id].m_LastTickTouchedBallSinceScored < m_pServer->TickSpeed() * last_touch_goal_window)
+					bool is_last_touched = vLastCharacterState[second_bot_id].m_LastTickTouchedBallSinceScored > vLastCharacterState[first_bot_id].m_LastTickTouchedBall;
+					bool touched_in_window = m_pServer->Tick() - vLastCharacterState[second_bot_id].m_LastTickTouchedBallSinceScored < m_pServer->TickSpeed() * last_touch_goal_window;
+					if(is_last_touched || touched_in_window)
 					{
 						second_bot_reward += goal_reward;
 						vLastCharacterState[second_bot_id].ScoredGoal();
@@ -1137,7 +1139,9 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 				{
 					/*if(vBallControl[team_id] == 1)
 					{*/
-					if(m_pServer->Tick() - vLastCharacterState[first_bot_id].m_LastTickTouchedBallSinceScored < m_pServer->TickSpeed() * last_touch_goal_window)
+					bool is_last_touched = vLastCharacterState[first_bot_id].m_LastTickTouchedBallSinceScored > vLastCharacterState[second_bot_id].m_LastTickTouchedBall;
+					bool touched_in_window = m_pServer->Tick() - vLastCharacterState[first_bot_id].m_LastTickTouchedBallSinceScored < m_pServer->TickSpeed() * last_touch_goal_window;
+					if(is_last_touched || touched_in_window)
 					{
 						first_bot_reward += goal_reward;
 						vLastCharacterState[first_bot_id].ScoredGoal();
