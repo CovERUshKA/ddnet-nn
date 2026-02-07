@@ -87,9 +87,9 @@ struct ActorCriticImpl : public torch::nn::Module
 			//std::cout << bias.sizes() << std::endl;
  			// Modify only the last two bias values
 			// 0.55 is -1 when transformed with tanh and other values
-			bias.index_put_({0}, 0.55);
+			bias.index_put_({0}, -1);
 			//printf("5\n");
-			bias.index_put_({1}, 0.55);
+			bias.index_put_({1}, -1);
 		}
 
 	    //printf("Created from 0\n");
@@ -125,7 +125,8 @@ struct ActorCriticImpl : public torch::nn::Module
 		    // Bound it between lower_bound and upper_bound:
 		    double lower_bound = -4.0;
 		    double upper_bound = 0.0;
-		    log_std = lower_bound + (upper_bound - lower_bound) * ((torch::tanh(log_std) + 1) / 2);
+		    //log_std = lower_bound + (upper_bound - lower_bound) * ((torch::tanh(log_std) + 1) / 2);
+		    log_std = torch::clamp(log_std, lower_bound, upper_bound);
 		    action = torch::cat({action, log_std}, 1); // Concatenate action and log_std for output
 	    }
 	    catch(const std::exception &e)
@@ -161,7 +162,8 @@ struct ActorCriticImpl : public torch::nn::Module
 	    // Bound it between lower_bound and upper_bound:
 	    double lower_bound = -4.0;
 	    double upper_bound = 0.0;
-	    log_std = lower_bound + (upper_bound - lower_bound) * ((torch::tanh(log_std) + 1) / 2);
+	    // log_std = lower_bound + (upper_bound - lower_bound) * ((torch::tanh(log_std) + 1) / 2);
+	    log_std = torch::clamp(log_std, lower_bound, upper_bound);
 	    actions_flat = torch::cat({actions_flat, log_std}, 1); // Concatenate action and log_std for output
 	    //auto actions = actions_flat.reshape({batch, seq_len, n_out});
 	    // std::cout << "actions sizes: " << lstm_out.sizes() << std::endl;
@@ -191,7 +193,8 @@ struct ActorCriticImpl : public torch::nn::Module
 	    // Bound it between lower_bound and upper_bound:
 	    double lower_bound = -4.0;
 	    double upper_bound = 0.0;
-	    log_std = lower_bound + (upper_bound - lower_bound) * ((torch::tanh(log_std) + 1) / 2);
+	    // log_std = lower_bound + (upper_bound - lower_bound) * ((torch::tanh(log_std) + 1) / 2);
+	    log_std = torch::clamp(log_std, lower_bound, upper_bound);
 	    actions_flat = torch::cat({actions_flat, log_std}, 1); // Concatenate action and log_std for output
 	    auto actions = actions_flat.reshape({batch, seq_len, n_out});
 	    //std::cout << "actions sizes: " << lstm_out.sizes() << std::endl;

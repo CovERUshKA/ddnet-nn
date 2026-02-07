@@ -391,9 +391,9 @@ void CNeuralNetwork::OnInit()
 	update_tick = count_ticks * skip_tick;
 	ticks_collected = last_update_tick = 0;
 
-	load_model = false;
+	load_model = true;
 	load_previous = true;
-	load_folder_path = "train\\1770440708738";
+	load_folder_path = "train\\1770498207750";
 	load_main_model_name = "last";
 
 	bool record_initial_demo = true;
