@@ -393,7 +393,7 @@ void CNeuralNetwork::OnInit()
 
 	load_model = true;
 	load_previous = true;
-	load_folder_path = "train\\1769982442849_interesting_new_finding";
+	load_folder_path = "train\\1770440708738";
 	load_main_model_name = "last";
 
 	bool record_initial_demo = true;
@@ -1030,8 +1030,8 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 
 	// Rewards
 	static float last_touch_goal_window = 2.5f; // If the goal was scored in 2 seconds after touching the ball - goal reward is applied
-	static float goal_reward = 10.f; // Rewards when scoring a goal
-	static float goal_penalize_reward = -6.f; // Penalizes if goaled on your side
+	static float goal_reward = 6.f; // Rewards when scoring a goal
+	static float goal_penalize_reward = -3.f; // Penalizes if goaled on your side
 
 	// Spawn rewards
 	static float ball_on_center_spawn_reward = -0.3f; // -0.1f Center(at the start). This penalizes if both agents dont touch ball and it stays at spawn

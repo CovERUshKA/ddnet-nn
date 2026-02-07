@@ -31,7 +31,7 @@ double learning_rate = 5e-5;
 double actor_learning_rate = 3e-4; // 3e-4
 double log_std_learning_rate = 1e-4; // 1e-4
 double critic_learning_rate = 1e-3; // 1e-3
-double lstm_learning_rate = 1e-4; // 1e-5
+double lstm_learning_rate = 1e-4; // 1e-4
 //double weight_decay = 0.0001;
 
 int64_t mini_batch_size = 8000; // 4096, 8192, 16384, 32768
@@ -142,8 +142,8 @@ void ModelManager::ResetCUDAGraph()
 	}
 	else
 	{
-		input_to_model_id_tensor_current_indexes = torch::arange(0, count_bots, torch::kInt32).to(torch::kCUDA, true);
-		input_to_model_id_tensor_old_indexes = torch::empty({0}, torch::kInt32).to(torch::kCUDA, true);
+		input_to_model_id_tensor_current_indexes = torch::arange(0, count_bots, torch::kInt64).to(torch::kCUDA, true);
+		input_to_model_id_tensor_old_indexes = torch::empty({0}, torch::kInt64).to(torch::kCUDA, true);
 	}
 	// std::cout << input_to_model_id_tensor_current_indexes << std::endl;
 	// std::cout << input_to_model_id_tensor_old_indexes << std::endl;
@@ -596,7 +596,9 @@ std::vector<ModelOutput> ModelManager::Decide(
 	if(is_training && old_bots_indexes.size())
 	{
 		graph_input_tensors.copy_(state_gpu.index_select(0, input_to_model_id_tensor_old_indexes), true);
+		//printf("C2\n");
 		graph_h_input_tensors.copy_(h_lstm_states.index_select(1, input_to_model_id_tensor_old_indexes), true);
+		//printf("C3\n");
 		graph_c_input_tensors.copy_(c_lstm_states.index_select(1, input_to_model_id_tensor_old_indexes), true);
 	}
 	//printf("D\n");
@@ -662,10 +664,12 @@ std::vector<ModelOutput> ModelManager::Decide(
 	}
 	else if(!graph_recorded && warmup_index < 3)
 	{
+		//printf("RR1\n");
 		auto main_output = ac_work->actor_forward(graph_main_input_tensor, graph_h_main_input_tensor, graph_c_main_input_tensor);
 		graph_main_output_tensor.copy_(std::get<0>(main_output), true);
 		graph_h_main_output_tensor.copy_(std::get<1>(main_output), true);
 		graph_c_main_output_tensor.copy_(std::get<2>(main_output), true);
+		//printf("RR1.2\n");
 		for(int i = 0; i < old_bots_indexes.size(); ++i)
 		{
 			int model_id = input_to_model_id[old_indices[i]]; // get the model id for this input
@@ -702,18 +706,21 @@ std::vector<ModelOutput> ModelManager::Decide(
 	now = std::chrono::high_resolution_clock::now();
 	time_normal = std::chrono::duration<double>(now - measure_time).count() * 1000.;
 	measure_time = std::chrono::high_resolution_clock::now();
-
+	//printf("RWEWQewqe.2\n");
 	torch::Tensor tActions_original = torch::zeros({(int)input_inputs.size(), ac_work->n_out}, device);
 	torch::Tensor tActions_sampled = torch::zeros({(int)input_inputs.size(), 5}, device);
-	tActions_original.index_copy_(0, input_to_model_id_tensor_old_indexes, graph_output_tensors);
 	tActions_original.index_copy_(0, input_to_model_id_tensor_current_indexes, graph_main_output_tensor);
-	tActions_sampled.index_copy_(0, input_to_model_id_tensor_old_indexes, old_current_sampled);
 	tActions_sampled.index_copy_(0, input_to_model_id_tensor_current_indexes, av_current_sampled);
-	h_lstm_states.index_copy_(1, input_to_model_id_tensor_old_indexes, graph_h_output_tensors);
 	h_lstm_states.index_copy_(1, input_to_model_id_tensor_current_indexes, graph_h_main_output_tensor);
-	c_lstm_states.index_copy_(1, input_to_model_id_tensor_old_indexes, graph_c_output_tensors);
 	c_lstm_states.index_copy_(1, input_to_model_id_tensor_current_indexes, graph_c_main_output_tensor);
-	
+	if(is_training && old_bots_indexes.size())
+	{
+		tActions_original.index_copy_(0, input_to_model_id_tensor_old_indexes, graph_output_tensors);
+		tActions_sampled.index_copy_(0, input_to_model_id_tensor_old_indexes, old_current_sampled);
+		h_lstm_states.index_copy_(1, input_to_model_id_tensor_old_indexes, graph_h_output_tensors);
+		c_lstm_states.index_copy_(1, input_to_model_id_tensor_old_indexes, graph_c_output_tensors);
+	}
+	//printf("QWEWQEWQEwewqe.2\n");
 	// Concatenate all actions into a single tensor
 	/*auto tActions_original = torch::cat(all_actions_original, 0).reshape({(int)input_inputs.size(), ac_work->n_out});
 	auto tActions_sampled = torch::cat(all_actions_sampled, 0).reshape({(int)input_inputs.size(), 5});*/
