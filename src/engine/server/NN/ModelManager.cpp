@@ -213,27 +213,24 @@ ModelManager::ModelManager(bool is_training, std::string train_folder, size_t ba
 	{
 		std::vector<torch::optim::OptimizerParamGroup> param_groups;
 
-		param_groups.push_back(torch::optim::OptimizerParamGroup({ac_update->actor_network->parameters()},
-			std::make_unique<torch::optim::AdamOptions>(actor_learning_rate)));
-		param_groups.push_back(torch::optim::OptimizerParamGroup({ac_update->critic_network->parameters()},
-			std::make_unique<torch::optim::AdamOptions>(critic_learning_rate)));
-		param_groups.push_back(torch::optim::OptimizerParamGroup({ac_update->log_std_},
-			std::make_unique<torch::optim::AdamOptions>(log_std_learning_rate)));
 		param_groups.push_back(torch::optim::OptimizerParamGroup({ac_update->lstm->parameters()},
 			std::make_unique<torch::optim::AdamOptions>(lstm_learning_rate)));
+		param_groups.push_back(torch::optim::OptimizerParamGroup({ac_update->actor_network->parameters()},
+			std::make_unique<torch::optim::AdamOptions>(actor_learning_rate)));
+		param_groups.push_back(torch::optim::OptimizerParamGroup({ac_update->actor_head->parameters()},
+			std::make_unique<torch::optim::AdamOptions>(actor_learning_rate)));
+		param_groups.push_back(torch::optim::OptimizerParamGroup({ac_update->log_std_head->parameters()},
+			std::make_unique<torch::optim::AdamOptions>(log_std_learning_rate)));
+		param_groups.push_back(torch::optim::OptimizerParamGroup({ac_update->critic_network->parameters()},
+			std::make_unique<torch::optim::AdamOptions>(critic_learning_rate)));
 
 		opt = std::make_shared<torch::optim::Adam>(param_groups);
 		// scheduler = std::make_shared<torch::optim::ReduceLROnPlateauScheduler>(*opt, /* mode */ torch::optim::ReduceLROnPlateauScheduler::max, /* factor */ 0.5, /* patience */ 10);
-		opt->param_groups()[0].options().set_lr(actor_learning_rate);
-		opt->param_groups()[1].options().set_lr(critic_learning_rate);
-		if(opt->param_groups().size() >= 3)
-		{
-			opt->param_groups()[2].options().set_lr(log_std_learning_rate);
-		}
-		if(opt->param_groups().size() >= 4)
-		{
-			opt->param_groups()[3].options().set_lr(lstm_learning_rate);
-		}
+		opt->param_groups()[0].options().set_lr(lstm_learning_rate);
+		opt->param_groups()[1].options().set_lr(actor_learning_rate);
+		opt->param_groups()[2].options().set_lr(actor_learning_rate);
+		opt->param_groups()[3].options().set_lr(log_std_learning_rate);
+		opt->param_groups()[4].options().set_lr(critic_learning_rate);
 	}
 
 	//for(auto &param_group : opt->param_groups())
@@ -374,18 +371,11 @@ bool ModelManager::LoadModels(std::string folder_path, std::string main_model_na
 
 	if(is_training)
 	{
-		opt->param_groups()[0].options().set_lr(actor_learning_rate); // Actor
-		opt->param_groups()[1].options().set_lr(critic_learning_rate); // Critic
-		if(opt->param_groups().size() >= 3)
-		{
-			opt->param_groups()[2].options().set_lr(log_std_learning_rate); // Log Std
-		}
-		if(opt->param_groups().size() >= 4)
-		{
-			opt->param_groups()[3].options().set_lr(lstm_learning_rate); // LSTM
-		}
-		/*opt->param_groups().push_back(torch::optim::OptimizerParamGroup({ac_update->lstm->parameters()},
-			std::make_unique<torch::optim::AdamOptions>(lstm_learning_rate)));*/
+		opt->param_groups()[0].options().set_lr(lstm_learning_rate);
+		opt->param_groups()[1].options().set_lr(actor_learning_rate);
+		opt->param_groups()[2].options().set_lr(actor_learning_rate);
+		opt->param_groups()[3].options().set_lr(log_std_learning_rate);
+		opt->param_groups()[4].options().set_lr(critic_learning_rate);
 	}
 
 	try
@@ -525,6 +515,7 @@ process_main_network(torch::Tensor av_current, bool validating = false)
 	torch::Tensor dir_logits = av_current.slice(1, 2, 5);
 	torch::Tensor hook_logits = av_current.slice(1, 5, 6);
 	torch::Tensor hammer_logits = av_current.slice(1, 6, 7);
+	torch::Tensor log_std = av_current.slice(1, 7, 9);
 
 	auto angles = torch::tanh(angle_logits);
 	//printf("keke\n");
@@ -540,8 +531,7 @@ process_main_network(torch::Tensor av_current, bool validating = false)
 
 	if(ac_work->is_training() && !validating)
 	{
-		angles = ac_work->fast_normal(angles, ac_work->log_std_);
-		//std::cout << angles << std::endl;
+		angles = ac_work->fast_normal(angles, log_std);
 		hooks = sample_bernoulli_batch(hooks);
 		hammers = sample_bernoulli_batch(hammers);
 	}

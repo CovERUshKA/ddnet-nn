@@ -21,11 +21,11 @@ struct ActorCriticImpl : public torch::nn::Module
 
     // Actor.
     torch::nn::Sequential actor_network;
-    //torch::Tensor mu_;
-    torch::Tensor log_std_;
 
     // Critic.
     torch::nn::Sequential critic_network;
+
+	torch::nn::Linear actor_head = nullptr, log_std_head = nullptr;
 
 	ActorCriticImpl()
 	{
@@ -35,7 +35,7 @@ struct ActorCriticImpl : public torch::nn::Module
     bool Initialize(int64_t n_in, int64_t n_out, int64_t h_start, int64_t h_lstm, int64_t lstm_layers, double std)
     {
 	    this->n_in = n_in;
-	    this->n_out = n_out;
+	    this->n_out = n_out + 2;
 	    this->h_lstm = h_lstm;
 	    lstm = torch::nn::LSTM(torch::nn::LSTMOptions(n_in, h_lstm).num_layers(lstm_layers).batch_first(true));
 	    actor_network = torch::nn::Sequential(
@@ -48,12 +48,17 @@ struct ActorCriticImpl : public torch::nn::Module
 		    torch::nn::Linear(h_start / 4, h_start/8),
 		    torch::nn::ReLU(),
 		    torch::nn::Linear(h_start / 8, h_start / 16),
-		    torch::nn::ReLU(),
-		    torch::nn::Linear(h_start / 16, n_out)
+		    torch::nn::ReLU()
+		    //torch::nn::Linear(h_start / 16, n_out)
 		    //torch::nn::Tanh()
 		    );
+
+		actor_head = torch::nn::Linear(h_start / 16, n_out);
+
+		log_std_head = torch::nn::Linear(h_start / 16, 2);
+
 		//mu_ = torch::full(n_out, 0.);
-	    log_std_ = torch::full(2, std::log(std));
+	    //log_std_ = torch::full(2, std::log(std));
 		critic_network = torch::nn::Sequential(
 		    torch::nn::Linear(h_lstm, h_start),
 		    torch::nn::ReLU(),
@@ -67,12 +72,33 @@ struct ActorCriticImpl : public torch::nn::Module
 		    torch::nn::ReLU(),
 		    torch::nn::Linear(h_start / 16, 1)
 		);
+	    //printf("1\n");
+		// Get the last layer (final Linear layer)
+		//printf("2\n");
+
+		// Access the bias tensor
+		auto bias = log_std_head->bias;
+	    //printf("3\n");
+
+		if(bias.defined())
+		{
+			torch::NoGradGuard no_grad;
+			//printf("4\n");
+			//std::cout << bias.sizes() << std::endl;
+ 			// Modify only the last two bias values
+			// 0.55 is -1 when transformed with tanh and other values
+			bias.index_put_({0}, 0.55);
+			//printf("5\n");
+			bias.index_put_({1}, 0.55);
+		}
 
 	    //printf("Created from 0\n");
 
 		register_module("lstm", lstm);
 	    register_module("actor_network", actor_network);
-        register_parameter("log_std", log_std_);
+		register_module("actor_head", actor_head);
+	    register_module("log_std_head", log_std_head);
+        //register_parameter("log_std", log_std_);
 	    register_module("critic_network", critic_network);
 
 		this->lstm->flatten_parameters();
@@ -93,7 +119,14 @@ struct ActorCriticImpl : public torch::nn::Module
 		    auto lstm_out_tuple = lstm->forward(seq);
 		    auto lstm_out = std::get<0>(lstm_out_tuple); // [batch, 1, lstm_hidden]
 		    auto feat = lstm_out.squeeze(1); // [batch, lstm_hidden]
-		    action = actor_network->forward(feat);
+		    auto hidden = actor_network->forward(feat);
+		    action = actor_head->forward(hidden);
+		    auto log_std = log_std_head->forward(hidden);
+		    // Bound it between lower_bound and upper_bound:
+		    double lower_bound = -4.0;
+		    double upper_bound = 0.0;
+		    log_std = lower_bound + (upper_bound - lower_bound) * ((torch::tanh(log_std) + 1) / 2);
+		    action = torch::cat({action, log_std}, 1); // Concatenate action and log_std for output
 	    }
 	    catch(const std::exception &e)
 	    {
@@ -122,7 +155,14 @@ struct ActorCriticImpl : public torch::nn::Module
 	    auto batch = lstm_out.size(0);
 	    auto seq_len = lstm_out.size(1);
 	    auto feat = lstm_out.reshape({batch * seq_len, this->h_lstm});
-	    auto actions_flat = actor_network->forward(feat);
+	    auto hidden = actor_network->forward(feat);
+	    auto actions_flat = actor_head->forward(hidden);
+	    auto log_std = log_std_head->forward(hidden);
+	    // Bound it between lower_bound and upper_bound:
+	    double lower_bound = -4.0;
+	    double upper_bound = 0.0;
+	    log_std = lower_bound + (upper_bound - lower_bound) * ((torch::tanh(log_std) + 1) / 2);
+	    actions_flat = torch::cat({actions_flat, log_std}, 1); // Concatenate action and log_std for output
 	    //auto actions = actions_flat.reshape({batch, seq_len, n_out});
 	    // std::cout << "actions sizes: " << lstm_out.sizes() << std::endl;
 	    return {actions_flat, h_out, c_out};
@@ -145,7 +185,14 @@ struct ActorCriticImpl : public torch::nn::Module
 	    auto batch = lstm_out.size(0);
 	    auto seq_len = lstm_out.size(1);
 	    auto feat = lstm_out.reshape({batch * seq_len, this->h_lstm});
-	    auto actions_flat = actor_network->forward(feat);
+	    auto hidden = actor_network->forward(feat);
+	    auto actions_flat = actor_head->forward(hidden);
+	    auto log_std = log_std_head->forward(hidden);
+	    // Bound it between lower_bound and upper_bound:
+	    double lower_bound = -4.0;
+	    double upper_bound = 0.0;
+	    log_std = lower_bound + (upper_bound - lower_bound) * ((torch::tanh(log_std) + 1) / 2);
+	    actions_flat = torch::cat({actions_flat, log_std}, 1); // Concatenate action and log_std for output
 	    auto actions = actions_flat.reshape({batch, seq_len, n_out});
 	    //std::cout << "actions sizes: " << lstm_out.sizes() << std::endl;
 	    return {actions, h_out, c_out};
@@ -207,15 +254,17 @@ struct ActorCriticImpl : public torch::nn::Module
     {
 	    // Clone the actor network from the other model
 	    actor_network = std::dynamic_pointer_cast<torch::nn::SequentialImpl>(other->actor_network->clone());
-
+		// Clone the actor head from the other model
+	    actor_head = std::dynamic_pointer_cast<torch::nn::LinearImpl>(other->actor_head->clone());
+		// Clone the log_std head from the other model
+	    log_std_head = std::dynamic_pointer_cast<torch::nn::LinearImpl>(other->log_std_head->clone());
 	    // Clone the critic network from the other model
 	    critic_network = std::dynamic_pointer_cast<torch::nn::SequentialImpl>(other->critic_network->clone());
-
 		// Clone the critic network from the other model
 	    lstm = std::dynamic_pointer_cast<torch::nn::LSTMImpl>(other->lstm->clone());
 	    this->lstm->flatten_parameters();
 	    // Copy the log_std_ parameter
-	    log_std_ = other->log_std_.detach().clone();
+	    //log_std_ = other->log_std_.detach().clone();
 	    if(!other->is_training())
 	    {
 		    this->eval();
@@ -227,7 +276,9 @@ struct ActorCriticImpl : public torch::nn::Module
 	    //printf("Copied\n");
 	    register_module("lstm", lstm);
 	    register_module("actor_network", actor_network);
-	    register_parameter("log_std", log_std_);
+	    register_module("actor_head", actor_head);
+	    register_module("log_std_head", log_std_head);
+	    //register_parameter("log_std", log_std_);
 	    register_module("critic_network", critic_network);
     }
 
@@ -239,6 +290,12 @@ struct ActorCriticImpl : public torch::nn::Module
 	    //actor_network = *(torch::nn::Sequential*)(other->actor_network->clone().get());
 		//printf("1\n");
 
+		// Clone the actor head from the other model
+		actor_head = std::dynamic_pointer_cast<torch::nn::LinearImpl>(other->actor_head->clone());
+
+		// Clone the log_std head from the other model
+		log_std_head = std::dynamic_pointer_cast<torch::nn::LinearImpl>(other->log_std_head->clone());
+
 	    // Clone the critic network from the other model
 		critic_network = std::dynamic_pointer_cast<torch::nn::SequentialImpl>(other->critic_network->clone());
 		//printf("1\n");
@@ -247,7 +304,7 @@ struct ActorCriticImpl : public torch::nn::Module
 		lstm = std::dynamic_pointer_cast<torch::nn::LSTMImpl>(other->lstm->clone());
 		this->lstm->flatten_parameters();
 	    // Copy the log_std_ parameter
-	    log_std_ = other->log_std_.clone();
+	    //log_std_ = other->log_std_.clone();
 	    if(!other->is_training())
 	    {
 		    this->eval();
@@ -259,13 +316,25 @@ struct ActorCriticImpl : public torch::nn::Module
 	    //std::cout << log_std_ << std::endl;
     }
 
-	// Forward pass.
-    auto actor_parameters()
+	// Actor network parameters
+    auto actor_network_parameters()
     {
 	    return actor_network->parameters();
     }
 
-	// Forward pass.
+	// Actor head parameters
+    auto actor_head_parameters()
+    {
+	    return actor_head->parameters();
+    }
+
+	// Log std head parameters
+    auto log_std_head_parameters()
+    {
+	    return log_std_head->parameters();
+    }
+
+	// Critic parameters
     auto critic_parameters()
     {
 	    return critic_network->parameters();
@@ -296,7 +365,7 @@ struct ActorCriticImpl : public torch::nn::Module
     }
 
 	// Forward pass.
-    auto normal_angles(torch::Tensor x) -> torch::Tensor
+    auto normal_angles(torch::Tensor x, torch::Tensor std) -> torch::Tensor
     {
 	    if(this->is_training())
 	    {
@@ -304,7 +373,14 @@ struct ActorCriticImpl : public torch::nn::Module
 		    try
 		    {
 			    //action = at::normal(x, log_std_.exp().expand_as(x));
-			    action.slice(1, 0, 2) = fast_normal(action.slice(1, 0, 2), log_std_);
+			    //if(used_presamples >= count_presampled)
+			    //{
+				   // printf("presampled normals used off\n");
+				   // //presample_normal(normal_presampled.size(0), normal_presampled.size(1));
+			    //}
+			    action.slice(1, 0, 2) = fast_normal(action.slice(1, 0, 2), std);
+			    //action = x + normal_presampled[used_presamples];
+			    //used_presamples += 1;
 		    }
 		    catch(const std::exception &e)
 		    {
@@ -335,14 +411,43 @@ struct ActorCriticImpl : public torch::nn::Module
         }         
     }
 
+	// Normal is making synchronization so we need to presample it - https://pytorch.org/docs/stable/generated/torch.normal.html
+	//void presample_normal(int count_samples, int count_players)
+ //   {
+	//    torch::Tensor zero_mean = torch::zeros({count_samples, count_players, 2}, torch::kCUDA);
+
+	//    try
+	//    {
+	//	    //static double maxi_max = 0;
+	//	    normal_presampled = at::normal(zero_mean, log_std_.exp().expand_as(zero_mean));
+	//	    /*auto maxee = abs(normal_presampled.max().item<double>());
+	//	    if(maxee > 10 && maxee > maxi_max)
+	//	    {
+	//		    maxi_max = maxee;
+	//		    std::cout << "Presample new max: " << maxi_max << std::endl;
+	//		    std::cout << log_std_ << std::endl;
+	//	    }*/
+	//    }
+	//    catch(const std::exception &e)
+	//    {
+	//	    std::cout << "presample_normal error: " << e.what() << std::endl;
+	//	    std::cout << log_std_ << std::endl;
+	//    }
+	//	//std::cout << 
+	//    //printf("2\n");
+
+	//    count_presampled = count_samples;
+	//    used_presamples = 0;
+ //   }
+
 	// Gaussian entropy
-    auto entropy_gaussian() -> torch::Tensor
+    auto entropy_gaussian(torch::Tensor log_std) -> torch::Tensor
     {
 	    // Differential entropy of normal distribution. For reference https://pytorch.org/docs/stable/_modules/torch/distributions/normal.html#Normal
-	    auto gaussian_entropy = 0.5 + 0.5 * log(2 * M_PI) + log_std_;
+	    auto gaussian_entropy = 0.5 + 0.5 * log(2 * M_PI) + log_std;
 	    //std::cout << gaussian_entropy.sizes() << std::endl;
 	    // Sum over the last dimension (angle components)
-	    return gaussian_entropy.sum(); // Shape [...]
+	    return gaussian_entropy.sum(1); // Shape [...]
     }
 
 	// Bernoulli entropy
@@ -364,7 +469,8 @@ struct ActorCriticImpl : public torch::nn::Module
 
     auto entropy(torch::Tensor action) -> torch::Tensor
     {
-	    auto angle_entropy = entropy_gaussian();
+	    auto log_std = action.slice(1, 7, 9); // Shape [batch_size, 2]
+	    auto angle_entropy = entropy_gaussian(log_std);
         
 		auto probs = torch::sigmoid(action.slice(1, 5, 6)); // Shape [batch_size, 1]
 		auto hook_entropy = entropy_bernoulli(probs);
@@ -416,9 +522,11 @@ struct ActorCriticImpl : public torch::nn::Module
 	    auto mu_ = torch::tanh(logits.slice(1, 0, 2));
 	    auto _action = sampled.slice(1, 0, 2);
 
+	    auto log_std = logits.slice(1, 7, 9);
+
         // Logarithmic probability of taken action, given the current distribution.
-	    torch::Tensor var = (log_std_ + log_std_).exp();
-	    log_probs.slice(1, 0, 2) += -((_action - mu_) * (_action - mu_)) / (2 * var) - log_std_ - log(sqrt(2 * M_PI));
+		torch::Tensor var = (log_std + log_std).exp();
+	    log_probs.slice(1, 0, 2) += -((_action - mu_) * (_action - mu_)) / (2 * var) - log_std - log(sqrt(2 * M_PI));
 		log_probs.slice(1, 2, 3) += log_prob_categorical_batch(logits.slice(1, 2, 5), sampled.slice(1, 2, 3));
 		log_probs.slice(1, 3, 4) += log_prob_bernoulli_batch(logits.slice(1, 5, 6), sampled.slice(1, 3, 4));
 		log_probs.slice(1, 4, 5) += log_prob_bernoulli_batch(logits.slice(1, 6, 7), sampled.slice(1, 4, 5));

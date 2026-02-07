@@ -911,7 +911,13 @@ auto PPO::update(ActorCritic &ac, ActorCritic &ac_work,
 				//torch::Tensor entropy = ac->entropy(action).mean();
 				//std::cout << action.slice(0, 0, 10) << std::endl;
 
-				auto angle_entropy = ac->entropy_gaussian() / (1.42 * 2); // 1.42 * 2
+				auto log_std = action.slice(1, 7, 9);
+				//auto log_std = action.slice(1, 7, 9);
+				//std::cout << log_std.sizes() << std::endl;
+				//auto log_std_penalty = torch::relu(action.slice(1, 7, 9) - 2);
+				//auto log_std = action.slice(1, 7, 9)/*.clamp_max(0)*/;
+
+				auto angle_entropy = ac->entropy_gaussian(log_std) / (1.42 * 2); // 1.42 * 2
 				//std::cout << angle_entropy.sizes() << std::endl;
 
 
@@ -995,7 +1001,7 @@ auto PPO::update(ActorCritic &ac, ActorCritic &ac_work,
 					// Compute gradient norms
 					double actor_grad_norm = 0.0;
 					double critic_grad_norm = 0.0;
-					for(const auto &param : ac->actor_parameters())
+					for(const auto &param : ac->actor_network_parameters())
 					{
 						if(param.grad().defined())
 						{
@@ -1015,7 +1021,7 @@ auto PPO::update(ActorCritic &ac, ActorCritic &ac_work,
 					// Compute weight norms
 					double actor_weight_norm = 0.0;
 					double critic_weight_norm = 0.0;
-					for(const auto &param : ac->actor_parameters())
+					for(const auto &param : ac->actor_network_parameters())
 					{
 						actor_weight_norm += param.norm().item<double>();
 					}
@@ -1108,7 +1114,7 @@ auto PPO::update(ActorCritic &ac, ActorCritic &ac_work,
 						  << ", Min: " << cpy_adv.min().item<double>()
 						  << ", Max: " << cpy_adv.max().item<double>() << std::endl;
 
-					for(const auto &param : ac->actor_parameters())
+					for(const auto &param : ac->actor_network_parameters())
 					{
 						if(param.grad().defined())
 						{
