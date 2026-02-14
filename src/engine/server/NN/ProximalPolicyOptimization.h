@@ -449,6 +449,36 @@ public:
 		return r;
 	}
 
+	// Explained Variance
+	// Formula: 1 - Var(returns - values) / Var(returns)
+	float get_explained_variance()
+	{
+		torch::NoGradGuard no_grad;
+
+		if(values.dim() != returns.dim() || returns.size(0) != values.size(0))
+		{
+			throw std::invalid_argument("Inputs must have the same dimensions and size.");
+		}
+
+		// Variance of the actual returns (y_true)
+		float var_returns = returns.var().item<float>();
+
+		// If returns are constant (e.g., at the very start), EV is undefined.
+		// We return 0 to avoid division by zero.
+		if(var_returns < 1e-8)
+		{
+			return 0.0f;
+		}
+
+		// Variance of the residuals (errors)
+		float var_error = (returns - values).var().item<float>();
+
+		// Compute Explained Variance
+		float ev = 1.0f - (var_error / var_returns);
+
+		return ev;
+	}
+
 	bool next_sample(
 		size_t batch_size,
 		torch::Tensor &states_ret,
@@ -626,23 +656,19 @@ auto PPO::Initilize(size_t batch_size, size_t count_players, int n_in, int lstm_
 
 torch::Tensor normalize_advantages(const torch::Tensor &advantages)
 {
-	// Detach to prevent gradients flowing through normalization
-	auto advantages_detached = advantages.detach();
-
+	torch::NoGradGuard no_grad;
 	// Compute mean and standard deviation
-	auto mean = advantages_detached.mean();
-	auto std = advantages_detached.std();
+	auto mean = advantages.mean();
+	auto std = advantages.std();
 
 	// Normalize with epsilon for numerical stability
 	return (advantages - mean) / (std + 1e-8);
 }
 
-torch::Tensor compute_advantages(ActorCritic &ac, const torch::Tensor &returns, const torch::Tensor &values)
+torch::Tensor compute_advantages(const torch::Tensor &returns, const torch::Tensor &values)
 {
-	//auto values = ac->critic_forward(states);
-	//std::cout << values.sizes() << std::endl;
 	torch::Tensor advantages = returns - values;
-	return advantages; // normalize_advantages(advantages);
+	return advantages;
 }
 
 std::vector<float> tensor_to_vector(const torch::Tensor &tensor)
@@ -746,6 +772,18 @@ torch::Tensor calculate_returns(std::vector<float> &rewards, std::vector<bool> &
 	//auto decide_time = std::chrono::high_resolution_clock::now();
 	
 	tRet = tRet.to(torch::kCUDA, true);
+
+	//for(size_t i = 0; i < rewards.size(); i++)
+	//{
+	//	if(rewards[i] > 0.001f)
+	//	{ // Если случилось что-то важное
+	//		float current_advantage = returns[i] - vValues[i];
+	//		printf("TICK %d | Rew: %.4f | Val: %.3f | Ret: %.3f | Adv (raw): %.2f\n",
+	//			(int)i, rewards[i], vValues[i], returns[i], current_advantage);
+	//	}
+	//}
+	//system("PAUSE");
+	//exit(1);
 	/*auto now = std::chrono::high_resolution_clock::now();
 	std::cout << "Time to transfer: " << (float)(std::chrono::duration_cast<std::chrono::milliseconds>(now - decide_time).count()) << std::endl;*/
 	//tDones = tDones.to(device, myStream);
@@ -808,8 +846,13 @@ auto PPO::update(ActorCritic &ac, ActorCritic &ac_work,
 	torch::Tensor total_hammer_entropy_tensor = torch::zeros({}, torch::kCUDA); // Initialize tensor to accumulate hammer entropy
 	torch::Tensor total_direction_entropy_tensor = torch::zeros({}, torch::kCUDA); // Initialize tensor to accumulate direction entropy
 
+	// Grad norms
 	torch::Tensor total_actor_grad_norm = torch::zeros({}, torch::kCUDA);
 	torch::Tensor total_critic_grad_norm = torch::zeros({}, torch::kCUDA);
+	torch::Tensor total_lstm_grad_norm = torch::zeros({}, torch::kCUDA);
+	torch::Tensor total_actor_head_grad_norm = torch::zeros({}, torch::kCUDA);
+	torch::Tensor total_log_std_head_grad_norm = torch::zeros({}, torch::kCUDA);
+	// Weight norms
 	torch::Tensor total_actor_weight_norm = torch::zeros({}, torch::kCUDA);
 	torch::Tensor total_critic_weight_norm = torch::zeros({}, torch::kCUDA);
 	torch::Tensor total_actor_activation_mean = torch::zeros({}, torch::kCUDA);
@@ -835,6 +878,22 @@ auto PPO::update(ActorCritic &ac, ActorCritic &ac_work,
 
 	// Approximate KL Divergence
 	torch::Tensor approx_kl_tensor = torch::zeros({}, torch::kCUDA);
+
+	// Advantage
+	// Raw advantage
+	torch::Tensor mean_raw_advantage_tensor = torch::zeros({}, torch::kCUDA);
+	torch::Tensor std_raw_advantage_tensor = torch::zeros({}, torch::kCUDA);
+	torch::Tensor mean_min_raw_advantage_tensor = torch::zeros({}, torch::kCUDA);
+	torch::Tensor mean_max_raw_advantage_tensor = torch::zeros({}, torch::kCUDA);
+	torch::Tensor min_raw_advantage_tensor = torch::zeros({}, torch::kCUDA);
+	torch::Tensor max_raw_advantage_tensor = torch::zeros({}, torch::kCUDA);
+
+	// Normalized Advantage
+	/*torch::Tensor mean_normalized_advantage_tensor = torch::zeros({}, torch::kCUDA);
+	torch::Tensor mean_min_normalized_advantage_tensor = torch::zeros({}, torch::kCUDA);
+	torch::Tensor mean_max_normalized_advantage_tensor = torch::zeros({}, torch::kCUDA);
+	torch::Tensor min_normalized_advantage_tensor = torch::zeros({}, torch::kCUDA);
+	torch::Tensor max_normalized_advantage_tensor = torch::zeros({}, torch::kCUDA);*/
 
 	auto saved_size = replay_buffer->size();
 	size_t count_updates = 0;
@@ -872,8 +931,9 @@ auto PPO::update(ActorCritic &ac, ActorCritic &ac_work,
 			}
 		}
 		//printf(" done!\n");
-		stats.critic_mean_absolute_error = replay_buffer->get_mae();
-		stats.critic_correlation_coefficient = replay_buffer->get_correlation_coefficient();
+		stats.set("Critic Mean Absolute Error", replay_buffer->get_mae());
+		stats.set("Critic Correlation Coefficient", replay_buffer->get_correlation_coefficient());
+		stats.set("Explained Variance", replay_buffer->get_explained_variance());
 		
 		for(size_t i = 0; i < epochs; i++)
 		{
@@ -900,7 +960,8 @@ auto PPO::update(ActorCritic &ac, ActorCritic &ac_work,
 
 				torch::Tensor cpy_ret = returns; // normalize_rewards(returnsee);
 				
-				torch::Tensor cpy_adv = compute_advantages(ac, cpy_ret, cpy_values /*cpy_sta.view({cpy_sta.size(0), 1, 4372})*/);
+				torch::Tensor raw_adv = compute_advantages(cpy_ret, cpy_values /*cpy_sta.view({cpy_sta.size(0), 1, 4372})*/);
+				//torch::Tensor norm_adv = normalize_advantages(raw_adv);
 
 				// printf("UPDATING1.1\n");
 				auto [action, h_out_action, c_out_action] = ac->actor_forward_sequence(cpy_sta, h_lstm, c_lstm);
@@ -961,9 +1022,9 @@ auto PPO::update(ActorCritic &ac, ActorCritic &ac_work,
 				// printf("UPDATING1.5\n");
 				//std::cout << ratio.sizes() << std::endl;
 				//std::cout << cpy_adv.sizes() << std::endl;
-				auto surr1 = ratio * cpy_adv;
+				auto surr1 = ratio * raw_adv;
 				// printf("UPDATING1.5.1\n");
-				auto surr2 = torch::clamp(ratio, 1. - clip_param, 1. + clip_param) * cpy_adv;
+				auto surr2 = torch::clamp(ratio, 1. - clip_param, 1. + clip_param) * raw_adv;
 				// printf("UPDATING1.6\n");
 				// printf("4.9\n");
 				// Sleep(7000);
@@ -991,16 +1052,15 @@ auto PPO::update(ActorCritic &ac, ActorCritic &ac_work,
 					std::cout << "Exception during backward pass: " << e.what() << std::endl;
 				}
 
-				// Global gradient clipping specific to PPO
-				torch::nn::utils::clip_grad_norm_(ac->parameters(), 0.5f);
-				//torch::nn::utils::clip_grad_norm_(ac->critic_network->parameters(), 0.5f);
-
 				{
 					torch::NoGradGuard no_grad;
 
 					// Compute gradient norms
 					double actor_grad_norm = 0.0;
 					double critic_grad_norm = 0.0;
+					double lstm_grad_norm = 0.0;
+					double actor_head_grad_norm = 0.0;
+					double log_std_head_grad_norm = 0.0;
 					for(const auto &param : ac->actor_network_parameters())
 					{
 						if(param.grad().defined())
@@ -1015,8 +1075,32 @@ auto PPO::update(ActorCritic &ac, ActorCritic &ac_work,
 							critic_grad_norm += param.grad().norm().item<double>();
 						}
 					}
+					for(const auto &param : ac->lstm_parameters())
+					{
+						if(param.grad().defined())
+						{
+							lstm_grad_norm += param.grad().norm().item<double>();
+						}
+					}
+					for(const auto &param : ac->actor_head_parameters())
+					{
+						if(param.grad().defined())
+						{
+							actor_head_grad_norm += param.grad().norm().item<double>();
+						}
+					}
+					for(const auto &param : ac->log_std_head_parameters())
+					{
+						if(param.grad().defined())
+						{
+							log_std_head_grad_norm += param.grad().norm().item<double>();
+						}
+					}
 					total_actor_grad_norm += actor_grad_norm;
 					total_critic_grad_norm += critic_grad_norm;
+					total_lstm_grad_norm += lstm_grad_norm;
+					total_actor_head_grad_norm += actor_head_grad_norm;
+					total_log_std_head_grad_norm += log_std_head_grad_norm;
 
 					// Compute weight norms
 					double actor_weight_norm = 0.0;
@@ -1040,6 +1124,10 @@ auto PPO::update(ActorCritic &ac, ActorCritic &ac_work,
 					total_actor_activation_mean += actor_activation_mean;
 					total_actor_activation_std += actor_activation_std;
 				}
+
+				// Global gradient clipping specific to PPO
+				torch::nn::utils::clip_grad_norm_(ac->parameters(), 0.5f);
+				// torch::nn::utils::clip_grad_norm_(ac->critic_network->parameters(), 0.5f);
 
 				count_mini_batches_processed += 1;
 				if(count_mini_batches_processed == count_mini_batches)
@@ -1109,10 +1197,10 @@ auto PPO::update(ActorCritic &ac, ActorCritic &ac_work,
 						  << ", Min: " << new_log_prob.min().item<double>()
 						  << ", Max: " << new_log_prob.max().item<double>() << std::endl;
 
-					std::cout << "Advantages - Mean: " << cpy_adv.mean().item<double>()
-						  << ", Std: " << cpy_adv.std().item<double>()
-						  << ", Min: " << cpy_adv.min().item<double>()
-						  << ", Max: " << cpy_adv.max().item<double>() << std::endl;
+					std::cout << "Advantages - Mean: " << raw_adv.mean().item<double>()
+						  << ", Std: " << raw_adv.std().item<double>()
+						  << ", Min: " << raw_adv.min().item<double>()
+						  << ", Max: " << raw_adv.max().item<double>() << std::endl;
 
 					for(const auto &param : ac->actor_network_parameters())
 					{
@@ -1172,6 +1260,19 @@ auto PPO::update(ActorCritic &ac, ActorCritic &ac_work,
 				min_ratio_tensor += ratio.detach().min();
 				max_ratio_tensor += ratio.detach().max();
 
+				mean_raw_advantage_tensor += raw_adv.detach().mean();
+				std_raw_advantage_tensor += raw_adv.detach().std();
+				mean_min_raw_advantage_tensor += raw_adv.detach().min();
+				mean_max_raw_advantage_tensor += raw_adv.detach().max();
+				min_raw_advantage_tensor = torch::min(min_raw_advantage_tensor, raw_adv.detach().min());
+				max_raw_advantage_tensor = torch::max(max_raw_advantage_tensor, raw_adv.detach().max());
+
+				/*mean_normalized_advantage_tensor += norm_adv.detach().mean();
+				mean_min_normalized_advantage_tensor += norm_adv.detach().min();
+				mean_max_normalized_advantage_tensor += norm_adv.detach().max();
+				min_normalized_advantage_tensor = torch::min(min_normalized_advantage_tensor, norm_adv.detach().min());
+				max_normalized_advantage_tensor = torch::max(max_normalized_advantage_tensor, norm_adv.detach().max());*/
+
 				// Approximate KL Divergence
 				{
 					torch::NoGradGuard no_grad;
@@ -1193,44 +1294,63 @@ auto PPO::update(ActorCritic &ac, ActorCritic &ac_work,
 	//auto decide_time = std::chrono::high_resolution_clock::now();
 	replay_buffer->clear();
 
-	stats.avg_training_loss = total_loss_tensor.item<double>() / count_updates;
-	stats.avg_actor_loss = total_actor_loss_tensor.item<double>() / count_updates;
-	stats.avg_critic_loss = total_critic_loss_tensor.item<double>() / count_updates;
-	stats.avg_entropy = total_entropy_tensor.item<double>() / count_updates;
+	stats.set("Training loss", total_loss_tensor.item<double>() / count_updates);
+	stats.set("Actor loss", total_actor_loss_tensor.item<double>() / count_updates);
+	stats.set("Critic loss", total_critic_loss_tensor.item<double>() / count_updates);
+	stats.set("Entropy", total_entropy_tensor.item<double>() / count_updates);
 
-	stats.avg_actor_grad_norm = total_actor_grad_norm.item<double>() / count_updates;
-	stats.avg_critic_grad_norm = total_critic_grad_norm.item<double>() / count_updates;
-	stats.avg_actor_weight_norm = total_actor_weight_norm.item<double>() / count_updates;
-	stats.avg_critic_weight_norm = total_critic_weight_norm.item<double>() / count_updates;
-	stats.avg_actor_activation_mean = total_actor_activation_mean.item<double>() / count_updates;
-	stats.avg_actor_activation_std = total_actor_activation_std.item<double>() / count_updates;
+	// Grad norms
+	stats.set("Actor grad norm", total_actor_grad_norm.item<double>() / count_updates);
+	stats.set("Critic grad norm", total_critic_grad_norm.item<double>() / count_updates);
+	stats.set("LSTM grad norm", total_lstm_grad_norm.item<double>() / count_updates);
+	stats.set("Actor Head grad norm", total_actor_head_grad_norm.item<double>() / count_updates);
+	stats.set("Log Std Head grad norm", total_log_std_head_grad_norm.item<double>() / count_updates);
+	// Weight norms
+	stats.set("Actor weight norm", total_actor_weight_norm.item<double>() / count_updates);
+	stats.set("Critic weight norm", total_critic_weight_norm.item<double>() / count_updates);
+	stats.set("Actor activation mean", total_actor_activation_mean.item<double>() / count_updates);
+	stats.set("Actor activation std", total_actor_activation_std.item<double>() / count_updates);
 
-	stats.avg_angle_entropy = total_angle_entropy_tensor.item<double>() / count_updates;
-	stats.avg_hook_entropy = total_hook_entropy_tensor.item<double>() / count_updates;
-	stats.avg_hammer_entropy = total_hammer_entropy_tensor.item<double>() / count_updates;
-	stats.avg_direction_entropy = total_direction_entropy_tensor.item<double>() / count_updates;
+	stats.set("Angle entropy", total_angle_entropy_tensor.item<double>() / count_updates);
+	stats.set("Hook entropy", total_hook_entropy_tensor.item<double>() / count_updates);
+	stats.set("Hammer entropy", total_hammer_entropy_tensor.item<double>() / count_updates);
+	stats.set("Direction entropy", total_direction_entropy_tensor.item<double>() / count_updates);
 
-	stats.min_entropy = min_entropy_tensor.item<double>() / count_updates;
-	stats.min_angle_entropy = min_angle_entropy_tensor.item<double>() / count_updates;
-	stats.min_hook_entropy = min_hook_entropy_tensor.item<double>() / count_updates;
-	stats.min_hammer_entropy = min_hammer_entropy_tensor.item<double>() / count_updates;
-	stats.min_direction_entropy = min_direction_entropy_tensor.item<double>() / count_updates;
+	stats.set("Minimal Entropy", min_entropy_tensor.item<double>() / count_updates);
+	stats.set("Minimal Angle entropy", min_angle_entropy_tensor.item<double>() / count_updates);
+	stats.set("Minimal Hook entropy", min_hook_entropy_tensor.item<double>() / count_updates);
+	stats.set("Minimal Hammer entropy", min_hammer_entropy_tensor.item<double>() / count_updates);
+	stats.set("Minimal Direction entropy", min_direction_entropy_tensor.item<double>() / count_updates);
 
-	stats.max_entropy = max_entropy_tensor.item<double>() / count_updates;
-	stats.max_angle_entropy = max_angle_entropy_tensor.item<double>() / count_updates;
-	stats.max_hook_entropy = max_hook_entropy_tensor.item<double>() / count_updates;
-	stats.max_hammer_entropy = max_hammer_entropy_tensor.item<double>() / count_updates;
-	stats.max_direction_entropy = max_direction_entropy_tensor.item<double>() / count_updates;
+	stats.set("Maximal Entropy", max_entropy_tensor.item<double>() / count_updates);
+	stats.set("Maximal Angle entropy", max_angle_entropy_tensor.item<double>() / count_updates);
+	stats.set("Maximal Hook entropy", max_hook_entropy_tensor.item<double>() / count_updates);
+	stats.set("Maximal Hammer entropy", max_hammer_entropy_tensor.item<double>() / count_updates);
+	stats.set("Maximal Direction entropy", max_direction_entropy_tensor.item<double>() / count_updates);
 
 	// Policy Probability Ratio
-	stats.mean_ratio = mean_ratio_tensor.item<double>() / count_updates;
-	stats.std_ratio = std_ratio_tensor.item<double>() / count_updates;
-	stats.min_ratio = min_ratio_tensor.item<double>() / count_updates;
-	stats.max_ratio = max_ratio_tensor.item<double>() / count_updates;
+	stats.set("Mean Ratio", mean_ratio_tensor.item<double>() / count_updates);
+	stats.set("Std Ratio", std_ratio_tensor.item<double>() / count_updates);
+	stats.set("Minimal Ratio", min_ratio_tensor.item<double>() / count_updates);
+	stats.set("Maximal Ratio", max_ratio_tensor.item<double>() / count_updates);
+
+	// Raw Advantage
+	stats.set("Mean Raw Advantage", mean_raw_advantage_tensor.item<double>() / count_updates);
+	stats.set("Std Raw Advantage", std_raw_advantage_tensor.item<double>() / count_updates);
+	stats.set("Mean Minimal Raw Advantage", mean_min_raw_advantage_tensor.item<double>() / count_updates);
+	stats.set("Mean Maximal Raw Advantage", mean_max_raw_advantage_tensor.item<double>() / count_updates);
+	stats.set("Minimal Raw Advantage", min_raw_advantage_tensor.item<double>());
+	stats.set("Maximal Raw Advantage", max_raw_advantage_tensor.item<double>());
+	// Normalized Advantage
+	/*stats.set("Mean Normalized Advantage", mean_normalized_advantage_tensor.item<double>() / count_updates);
+	stats.set("Mean Minimal Normalized Advantage", mean_min_normalized_advantage_tensor.item<double>() / count_updates);
+	stats.set("Mean Maximal Normalized Advantage", mean_max_normalized_advantage_tensor.item<double>() / count_updates);
+	stats.set("Minimal Normalized Advantage", min_normalized_advantage_tensor.item<double>());
+	stats.set("Maximal Normalized Advantage", max_normalized_advantage_tensor.item<double>());*/
 
 	// Approximate KL Divergence
 	//std::cout << approx_kl_tensor.item<double>() << std::endl;
-	stats.approx_kl = approx_kl_tensor.item<double>() / count_updates;
+	stats.set("Approximate KL Divergence", approx_kl_tensor.item<double>() / count_updates);
 
 	//std::cout << "Max entropy: " << max_entropy_tensor << std::endl;
 	//std::cout << "Median entropy: " << median_entropy_tensor << std::endl;

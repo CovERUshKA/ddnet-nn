@@ -41,36 +41,37 @@ struct ActorCriticImpl : public torch::nn::Module
 	    actor_network = torch::nn::Sequential(
 		    torch::nn::Linear(h_lstm, h_start),
 		    torch::nn::ReLU(),
-		    torch::nn::Linear(h_start, h_start/2),
+		    torch::nn::Linear(h_start, h_start),
 			torch::nn::ReLU(),
-		    torch::nn::Linear(h_start / 2, h_start/4),
+		    torch::nn::Linear(h_start, h_start),
 		    torch::nn::ReLU(),
-		    torch::nn::Linear(h_start / 4, h_start/8),
+		    torch::nn::Linear(h_start, h_start),
 		    torch::nn::ReLU(),
-		    torch::nn::Linear(h_start / 8, h_start / 16),
+		    torch::nn::Linear(h_start, h_start / 2),
 		    torch::nn::ReLU()
 		    //torch::nn::Linear(h_start / 16, n_out)
 		    //torch::nn::Tanh()
 		    );
 
-		actor_head = torch::nn::Linear(h_start / 16, n_out);
+		actor_head = torch::nn::Linear(h_start / 2, n_out);
 
-		log_std_head = torch::nn::Linear(h_start / 16, 2);
+		log_std_head = torch::nn::Linear(h_start / 2, 2);
 
 		//mu_ = torch::full(n_out, 0.);
 	    //log_std_ = torch::full(2, std::log(std));
+		auto critic_h_start_size = h_start;
 		critic_network = torch::nn::Sequential(
-		    torch::nn::Linear(h_lstm, h_start),
+			torch::nn::Linear(h_lstm, critic_h_start_size),
 		    torch::nn::ReLU(),
-		    torch::nn::Linear(h_start, h_start / 2),
+			torch::nn::Linear(critic_h_start_size, critic_h_start_size),
 		    torch::nn::ReLU(),
-		    torch::nn::Linear(h_start / 2, h_start / 4),
+			torch::nn::Linear(critic_h_start_size, critic_h_start_size),
 		    torch::nn::ReLU(),
-		    torch::nn::Linear(h_start / 4, h_start / 8),
+			torch::nn::Linear(critic_h_start_size, critic_h_start_size),
 		    torch::nn::ReLU(),
-		    torch::nn::Linear(h_start / 8, h_start / 16),
+			torch::nn::Linear(critic_h_start_size, critic_h_start_size / 2),
 		    torch::nn::ReLU(),
-		    torch::nn::Linear(h_start / 16, 1)
+			torch::nn::Linear(critic_h_start_size / 2, 1)
 		);
 	    //printf("1\n");
 		// Get the last layer (final Linear layer)
@@ -123,7 +124,7 @@ struct ActorCriticImpl : public torch::nn::Module
 		    action = actor_head->forward(hidden);
 		    auto log_std = log_std_head->forward(hidden);
 		    // Bound it between lower_bound and upper_bound:
-		    double lower_bound = -4.0;
+		    double lower_bound = -3.0;
 		    double upper_bound = 0.0;
 		    //log_std = lower_bound + (upper_bound - lower_bound) * ((torch::tanh(log_std) + 1) / 2);
 		    log_std = torch::clamp(log_std, lower_bound, upper_bound);
@@ -160,7 +161,7 @@ struct ActorCriticImpl : public torch::nn::Module
 	    auto actions_flat = actor_head->forward(hidden);
 	    auto log_std = log_std_head->forward(hidden);
 	    // Bound it between lower_bound and upper_bound:
-	    double lower_bound = -4.0;
+	    double lower_bound = -3.0;
 	    double upper_bound = 0.0;
 	    // log_std = lower_bound + (upper_bound - lower_bound) * ((torch::tanh(log_std) + 1) / 2);
 	    log_std = torch::clamp(log_std, lower_bound, upper_bound);
@@ -191,7 +192,7 @@ struct ActorCriticImpl : public torch::nn::Module
 	    auto actions_flat = actor_head->forward(hidden);
 	    auto log_std = log_std_head->forward(hidden);
 	    // Bound it between lower_bound and upper_bound:
-	    double lower_bound = -4.0;
+	    double lower_bound = -3.0;
 	    double upper_bound = 0.0;
 	    // log_std = lower_bound + (upper_bound - lower_bound) * ((torch::tanh(log_std) + 1) / 2);
 	    log_std = torch::clamp(log_std, lower_bound, upper_bound);
@@ -323,6 +324,12 @@ struct ActorCriticImpl : public torch::nn::Module
     auto actor_network_parameters()
     {
 	    return actor_network->parameters();
+    }
+
+	// LSTM parameters
+    auto lstm_parameters()
+    {
+	    return lstm->parameters();
     }
 
 	// Actor head parameters

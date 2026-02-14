@@ -20,7 +20,7 @@ def plot_metric(fig, data, metric_name, row, col, ylabel=None, transform=None):
     for file, df in data.items():
         y = df[metric_name][1:] if transform is None else transform(df)
         fig.add_trace(
-            go.Scatter(x=df['Step'][1:], y=y, name=metric_name, mode='lines'),
+            go.Scatter(x=df['Step'][1:], y=y, name=metric_name + " (" + file + ")", mode='lines'),
             row=row, col=col
         )
     fig.update_xaxes(title_text='Step', row=row, col=col)
@@ -47,6 +47,7 @@ metrics = [
     ("Average current-old score difference", lambda df: (df["Current bot cumulative score"][1:] - df["Old bot cumulative score"][1:]) / df["Count episodes with old"][1:]),
     ("Actor loss", None),
     ("Critic loss", None),
+    ("Explained Variance", None),
     ("Critic Mean Absolute Error", None),
     ("Critic Correlation Coefficient", None),
     ("Training loss", None),
@@ -57,8 +58,14 @@ metrics = [
     (["Hook entropy", "Minimal Hook entropy", "Maximal Hook entropy"], None),
     (["Hammer entropy", "Minimal Hammer entropy", "Maximal Hammer entropy"], None),
     (["Direction entropy", "Minimal Direction entropy", "Maximal Direction entropy"], None),
+    (["Mean Raw Advantage", "Minimal Raw Advantage", "Maximal Raw Advantage", "Mean Minimal Raw Advantage", "Mean Maximal Raw Advantage"], None),
+    ("Std Raw Advantage", None),
+    (["Mean Normalized Advantage", "Minimal Normalized Advantage", "Maximal Normalized Advantage", "Mean Minimal Normalized Advantage", "Mean Maximal Normalized Advantage"], None),
     ("Entropy coefficient", None),
+    ("LSTM grad norm", None),
     ("Actor grad norm", None),
+    ("Actor Head grad norm", None),
+    ("Log Std Head grad norm", None),
     ("Critic grad norm", None),
     ("Actor weight norm", None),
     ("Critic weight norm", None),
@@ -115,14 +122,15 @@ fig.update_xaxes(title_text='Step', row=row, col=col)
 fig.update_yaxes(title_text='Average Score', row=row, col=col)
 fig.update_layout(title_text='Average Bot Scores', showlegend=True)
 
-def ema_tb(y, smoothing=0.9):
-    y = np.asarray(y, dtype=float)
-    alpha = 1 - smoothing
-    s = np.zeros_like(y)
-    s[0] = y[0]
-    for i in range(1, len(y)):
-        s[i] = alpha * y[i] + (1 - alpha) * s[i-1]
-    return s
+# Optional: Add smoothed average score using TensorBoard EMA
+# def ema_tb(y, smoothing=0.9):
+#     y = np.asarray(y, dtype=float)
+#     alpha = 1 - smoothing
+#     s = np.zeros_like(y)
+#     s[0] = y[0]
+#     for i in range(1, len(y)):
+#         s[i] = alpha * y[i] + (1 - alpha) * s[i-1]
+#     return s
 
 # Plot bot average score
 row = ((len(metrics) + 1) // ncols) + 1
@@ -135,11 +143,11 @@ for file, df in data.items():
                    name=f'Average score {file[:-4]}', mode='lines'),
         row=row, col=col
     )
-    fig.add_trace(
-        go.Scatter(x=df['Step'], y=ema_tb((first_bot_avg_score + second_bot_avg_score) / 2), 
-                   name=f'Average score smoothed {file[:-4]}', mode='lines'),
-        row=row, col=col
-    )
+    # fig.add_trace(
+    #     go.Scatter(x=df['Step'], y=ema_tb((first_bot_avg_score + second_bot_avg_score) / 2), 
+    #                name=f'Average score smoothed {file[:-4]}', mode='lines'),
+    #     row=row, col=col
+    # )
 fig.update_xaxes(title_text='Step', row=row, col=col)
 fig.update_yaxes(title_text='Average Score', row=row, col=col)
 fig.update_layout(title_text='Average Bots Score', showlegend=True)
@@ -222,5 +230,115 @@ fig.update_layout(
     showlegend=True
 )
 
+custom_code = """
+var SMOOTHING = 0.9;
+var gd = document.getElementById('{plot_id}');
+var smoothed = false;
+
+// Fast EMA
+function ema_tb(y, smoothing) {
+    var alpha = 1 - smoothing;
+    var s = new Array(y.length);
+    s[0] = y[0];
+    for (var i = 1; i < y.length; i++) {
+        s[i] = alpha * y[i] + (1 - alpha) * s[i-1];
+    }
+    return s;
+}
+
+// Add smoothed traces once
+function initializeSmoothing() {
+
+    if (gd._smoothingInitialized) return;
+
+    var newTraces = [];
+
+    for (var i = 0; i < gd.data.length; i++) {
+
+        var trace = gd.data[i];
+
+        var smoothedY = ema_tb(trace.y, SMOOTHING);
+
+        newTraces.push({
+            x: trace.x,
+            y: smoothedY,
+            type: trace.type,
+            mode: trace.mode,
+            line: trace.line,
+            name: trace.name + " (smoothed)",
+            xaxis: trace.xaxis,
+            yaxis: trace.yaxis,
+            hoverinfo: trace.hoverinfo,
+            visible: false
+        });
+    }
+
+    Plotly.addTraces(gd, newTraces);
+
+    gd._smoothingInitialized = true;
+}
+
+function toggleSmoothing() {
+
+    initializeSmoothing();
+
+    var opacityUpdates = [];
+    var visibilityUpdates = [];
+
+    var originalCount = gd.data.length / 2;
+
+    for (var i = 0; i < gd.data.length; i++) {
+
+        if (i < originalCount) {
+            // original traces
+            opacityUpdates.push(smoothed ? 1.0 : 0.25);
+            visibilityUpdates.push(true);
+        } else {
+            // smoothed traces
+            opacityUpdates.push(1.0);
+            visibilityUpdates.push(!smoothed);
+        }
+    }
+
+    Plotly.restyle(gd, {
+        opacity: opacityUpdates,
+        visible: visibilityUpdates
+    });
+
+    smoothed = !smoothed;
+    btn.innerText = smoothed
+        ? "Disable Smoothing (0.9)"
+        : "Enable Smoothing (0.9)";
+}
+
+// Floating button
+var btn = document.createElement("button");
+btn.innerText = "Enable Smoothing (0.9)";
+btn.onclick = toggleSmoothing;
+
+btn.style.position = "fixed";
+btn.style.top = "20px";
+btn.style.right = "20px";
+btn.style.zIndex = "9999";
+btn.style.padding = "12px 18px";
+btn.style.background = "#111";
+btn.style.color = "white";
+btn.style.border = "none";
+btn.style.borderRadius = "8px";
+btn.style.cursor = "pointer";
+btn.style.boxShadow = "0 0 10px rgba(0,0,0,0.4)";
+
+document.body.appendChild(btn);
+"""
+
+
+fig.write_html(
+    "data.html",
+    auto_open=True,
+    include_plotlyjs=True,
+    post_script=custom_code
+)
+
+
 # Save and show plot
-fig.write_html("data.html", auto_open=True)
+# fig.write_html("data.html", auto_open=True)

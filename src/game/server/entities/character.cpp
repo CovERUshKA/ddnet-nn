@@ -2081,9 +2081,9 @@ void CCharacter::NeuralNetworkPreDDRacePostCoreTick()
 {
 	int CurrentIndex = Collision()->GetMapIndex(m_Pos);
 
-	// Save only if it is 1st or 2nd teleport
+	// Save only if it is 1st, 2nd, 5th or 6th teleport
 	int evilz = Collision()->IsEvilTeleport(CurrentIndex);
-	if(evilz == 1 || evilz == 2)
+	if(evilz == 1 || evilz == 2 || evilz == 5 || evilz == 6)
 	{
 		m_TeleportNum = evilz;
 	}

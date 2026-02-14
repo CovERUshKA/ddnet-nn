@@ -22,30 +22,31 @@ namespace fs = std::filesystem;
 
 int64_t n_in = 40;
 int64_t n_out = 7;
-int64_t h_start = 1024; // 1024 256
+int64_t h_start = 512; // 1024 256
 int64_t h_lstm = 256; // 256
 int64_t seq_len = 32;
 int64_t lstm_layers = 1; // 1024 256
 double std_dev = 0.37; // log(0.37) ~ -1
 double learning_rate = 5e-5;
-double actor_learning_rate = 3e-4; // 3e-4
-double log_std_learning_rate = 1e-4; // 1e-4
-double critic_learning_rate = 1e-3; // 1e-3
+double actor_learning_rate = 1e-4; // 3e-4
+double log_std_learning_rate = 1e-5; // 1e-4 - global, 1e-5 state-dependent
+double critic_learning_rate = 3e-4; // 1e-3
 double lstm_learning_rate = 1e-4; // 1e-4
 //double weight_decay = 0.0001;
 
-int64_t mini_batch_size = 8000; // 4096, 8192, 16384, 32768
+int64_t mini_batch_size = 8000; // 8000 is the best I think
 int64_t count_mini_batches = 1;
-int64_t max_mini_batch_size = 8000; // 4096, 8192, 16384, 32768
+//int64_t max_mini_batch_size = 8000; // 4096, 8192, 16384, 32768
 int64_t ppo_epochs = 4;
 double ent_coef = 1e-2; // Entropy coefficient
-//double min_ent_coef = 2e-3;
+double min_ent_coef = 5e-3;
+double ent_decay_step = (ent_coef - min_ent_coef) / 300.;
 //double ent_decay_factor = 0.95;
 double clip_param = 0.2; // Default: 0.2
 float gamma = 0.99f; // Default: 0.99f Discount factor
 float lambda = 0.95f; // GAE lambda
 
-float old_models_train = 0.2f; // Percent of old models
+float old_models_train = 0.2f; // Percent of old models. 0.2 = 0.25% of old models
 int count_cached_old_models = 100; // old_models_train * ((float)count_bots / 2.f)
 
 int warmup_index = 0;
@@ -949,7 +950,7 @@ void ModelManager::Update(double avg_reward, bool cache_model, bool &updated,
 		exit(1);
 	}
 
-	/*ent_coef -=  (1e-2 - min_ent_coef) / 300.;
+	/*ent_coef -= ent_decay_step;
 	ent_coef = std::max(min_ent_coef, ent_coef);*/
 
 	if(cache_model)

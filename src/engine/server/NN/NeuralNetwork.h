@@ -64,7 +64,7 @@ class CNeuralNetwork : public IInterface
 	int cache_model_gap;
 
 	//std::random_device rd;
-	//std::mt19937 gen;
+	std::mt19937 gen;
 	//std::discrete_distribution<> spawn_probabilities_distribution;
 
 	int count_bots;
@@ -96,6 +96,8 @@ class CNeuralNetwork : public IInterface
 	std::string dir_name;
 
 	std::chrono::high_resolution_clock::time_point decide_time;
+	std::chrono::high_resolution_clock::time_point start_time_of_rollout;
+	float cumulative_time_to_collect_experience;
 	float cumulative_time_to_update;
 	float cumulative_time_to_decide;
 	float cumulative_time_to_tick;
@@ -137,4 +139,6 @@ public:
 	void ChangeSwitchState(int Number, int Team, bool state);
 
 	CPlayer *AddBot(std::string name, vec2 spawn_pos);
+
+	float real_random_float();
 }; // namespace NeuralNetwork
