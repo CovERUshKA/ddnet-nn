@@ -41,21 +41,21 @@ struct ActorCriticImpl : public torch::nn::Module
 	    actor_network = torch::nn::Sequential(
 		    torch::nn::Linear(h_lstm, h_start),
 		    torch::nn::ReLU(),
-		    torch::nn::Linear(h_start, h_start),
-			torch::nn::ReLU(),
-		    torch::nn::Linear(h_start, h_start),
-		    torch::nn::ReLU(),
-		    torch::nn::Linear(h_start, h_start),
-		    torch::nn::ReLU(),
 		    torch::nn::Linear(h_start, h_start / 2),
+			torch::nn::ReLU(),
+		    torch::nn::Linear(h_start / 2, h_start / 4),
+		    torch::nn::ReLU(),
+		    torch::nn::Linear(h_start / 4, h_start / 8),
+		    torch::nn::ReLU(),
+		    torch::nn::Linear(h_start / 8, h_start / 16),
 		    torch::nn::ReLU()
 		    //torch::nn::Linear(h_start / 16, n_out)
 		    //torch::nn::Tanh()
 		    );
 
-		actor_head = torch::nn::Linear(h_start / 2, n_out);
+		actor_head = torch::nn::Linear(h_start / 16, n_out);
 
-		log_std_head = torch::nn::Linear(h_start / 2, 2);
+		log_std_head = torch::nn::Linear(h_start / 16, 2);
 
 		//mu_ = torch::full(n_out, 0.);
 	    //log_std_ = torch::full(2, std::log(std));
@@ -63,15 +63,15 @@ struct ActorCriticImpl : public torch::nn::Module
 		critic_network = torch::nn::Sequential(
 			torch::nn::Linear(h_lstm, critic_h_start_size),
 		    torch::nn::ReLU(),
-			torch::nn::Linear(critic_h_start_size, critic_h_start_size),
-		    torch::nn::ReLU(),
-			torch::nn::Linear(critic_h_start_size, critic_h_start_size),
-		    torch::nn::ReLU(),
-			torch::nn::Linear(critic_h_start_size, critic_h_start_size),
-		    torch::nn::ReLU(),
 			torch::nn::Linear(critic_h_start_size, critic_h_start_size / 2),
 		    torch::nn::ReLU(),
-			torch::nn::Linear(critic_h_start_size / 2, 1)
+			torch::nn::Linear(critic_h_start_size / 2, critic_h_start_size / 4),
+		    torch::nn::ReLU(),
+			torch::nn::Linear(critic_h_start_size / 4, critic_h_start_size / 8),
+		    torch::nn::ReLU(),
+			torch::nn::Linear(critic_h_start_size / 8, critic_h_start_size / 16),
+		    torch::nn::ReLU(),
+			torch::nn::Linear(critic_h_start_size / 16, 1)
 		);
 	    //printf("1\n");
 		// Get the last layer (final Linear layer)

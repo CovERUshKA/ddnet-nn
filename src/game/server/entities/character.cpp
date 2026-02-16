@@ -797,6 +797,10 @@ void CCharacter::Tick()
 
 void CCharacter::TickDeferred()
 {
+	/*static auto count_collected = 0;
+	count_collected += 1;
+	auto decide_time = std::chrono::high_resolution_clock::now();*/
+
 	// advance the dummy
 	{
 		CWorldCore TempWorld;
@@ -806,16 +810,31 @@ void CCharacter::TickDeferred()
 		m_ReckoningCore.Move();
 		m_ReckoningCore.Quantize();
 	}
+	//static double timed_1 = 0;
+	//timed_1 += std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - decide_time).count() * 1000;
+	////printf("1: %fms\n", timed_1 / count_collected);
 
+	//decide_time = std::chrono::high_resolution_clock::now();
 	//lastsentcore
 	vec2 StartPos = m_Core.m_Pos;
 	vec2 StartVel = m_Core.m_Vel;
 	bool StuckBefore = Collision()->TestBox(m_Core.m_Pos, CCharacterCore::PhysicalSizeVec2());
-
+	//static double timed_2 = 0;
+	//timed_2 += std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - decide_time).count() * 1000;
+	////printf("2: %fms\n", timed_2 / count_collected);
+	//decide_time = std::chrono::high_resolution_clock::now();
 	m_Core.m_Id = m_pPlayer->GetCID();
 	m_Core.Move();
+	/*static double timed_3 = 0;
+	timed_3 += std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - decide_time).count() * 1000;*/
+	//printf("3: %fms\n", timed_3 / count_collected);
+	//decide_time = std::chrono::high_resolution_clock::now();
 	bool StuckAfterMove = Collision()->TestBox(m_Core.m_Pos, CCharacterCore::PhysicalSizeVec2());
 	m_Core.Quantize();
+	//static double timed_4 = 0;
+	//timed_4 += std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - decide_time).count() * 1000;
+	////printf("4: %fms\n", timed_4 / count_collected);
+	//decide_time = std::chrono::high_resolution_clock::now();
 	bool StuckAfterQuant = Collision()->TestBox(m_Core.m_Pos, CCharacterCore::PhysicalSizeVec2());
 	m_Pos = m_Core.m_Pos;
 
@@ -876,6 +895,10 @@ void CCharacter::TickDeferred()
 		m_Pos.x = m_Input.m_TargetX;
 		m_Pos.y = m_Input.m_TargetY;
 	}
+	//static double timed_5 = 0;
+	//timed_5 += std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - decide_time).count() * 1000;
+	////printf("5: %fms\n", timed_5 / count_collected);
+	//decide_time = std::chrono::high_resolution_clock::now();
 
 	// update the m_SendCore if needed
 	{
@@ -895,6 +918,9 @@ void CCharacter::TickDeferred()
 			m_Core.m_Reset = false;
 		}
 	}
+	/*static double timed_6 = 0;
+	timed_6 += std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - decide_time).count() * 1000;*/
+	//printf("6: %fms\n", timed_6 / count_collected);
 }
 
 void CCharacter::TickPaused()

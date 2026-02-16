@@ -297,7 +297,8 @@ void CCharacterCore::Tick(bool UseInput, bool DoDeferredTick)
 		if(!this->m_HookHitDisabled && m_pWorld && m_Tuning.m_PlayerHooking)
 		{
 			float Distance = 0.0f;
-			for(int i = 0; i < MAX_CLIENTS; i++)
+			auto players_in_team = m_pTeams->GetPlayersInTeam(m_pTeams->Team(m_Id));
+			for(const auto &i : players_in_team)
 			{
 				CCharacterCore *pCharCore = m_pWorld->m_apCharacters[i];
 				if(!pCharCore || pCharCore == this || (!(m_Super || pCharCore->m_Super) && ((m_Id != -1 && !m_pTeams->CanCollide(i, m_Id)) || pCharCore->m_Solo || m_Solo)))
@@ -413,7 +414,8 @@ void CCharacterCore::TickDeferred()
 {
 	if(m_pWorld)
 	{
-		for(int i = 0; i < MAX_CLIENTS; i++)
+		auto players_in_team = m_pTeams->GetPlayersInTeam(m_pTeams->Team(m_Id));
+		for(const auto &i : players_in_team)
 		{
 			CCharacterCore *pCharCore = m_pWorld->m_apCharacters[i];
 			if(!pCharCore)
@@ -485,6 +487,9 @@ void CCharacterCore::TickDeferred()
 
 void CCharacterCore::Move()
 {
+	/*static auto count_collected = 0;
+	count_collected += 1;
+	auto decide_time = std::chrono::high_resolution_clock::now();*/
 	float RampValue = VelocityRamp(length(m_Vel) * 50, m_Tuning.m_VelrampStart, m_Tuning.m_VelrampRange, m_Tuning.m_VelrampCurvature);
 
 	m_Vel.x = m_Vel.x * RampValue;
@@ -515,17 +520,31 @@ void CCharacterCore::Move()
 		{
 			int End = Distance + 1;
 			vec2 LastPos = m_Pos;
+			//static double timed_1 = 0;
+			/*timed_1 += std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - decide_time).count() * 1000;
+			printf("1: %fms\n", timed_1 / count_collected);*/
+			/*static double summe_first = 0;
+			static double summe_second = 0;
+			static double summe_third = 0;*/
+			auto players_in_team = m_pTeams->GetPlayersInTeam(m_pTeams->Team(m_Id));
+			//printf("players in team: %d\n", (int)players_in_team.size());
 			for(int i = 0; i < End; i++)
 			{
+				//decide_time = std::chrono::high_resolution_clock::now();
 				float a = i / Distance;
 				vec2 Pos = mix(m_Pos, NewPos, a);
-				for(int p = 0; p < MAX_CLIENTS; p++)
+				//summe_first += std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - decide_time).count() * 1000;
+				for(const auto &p : players_in_team)
 				{
+					//decide_time = std::chrono::high_resolution_clock::now();
 					CCharacterCore *pCharCore = m_pWorld->m_apCharacters[p];
 					if(!pCharCore || pCharCore == this)
 						continue;
-					if((!(pCharCore->m_Super || m_Super) && (m_Solo || pCharCore->m_Solo || pCharCore->m_CollisionDisabled || (m_Id != -1 && !m_pTeams->CanCollide(m_Id, p)))))
+					bool test = (!(pCharCore->m_Super || m_Super) && (m_Solo || pCharCore->m_Solo || pCharCore->m_CollisionDisabled || (m_Id != -1 && !m_pTeams->CanCollide(m_Id, p))));
+					//summe_second += std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - decide_time).count() * 1000;
+					if(test)
 						continue;
+					//decide_time = std::chrono::high_resolution_clock::now();
 					float D = distance(Pos, pCharCore->m_Pos);
 					if(D < PhysicalSize() && D >= 0.0f)
 					{
@@ -533,11 +552,19 @@ void CCharacterCore::Move()
 							m_Pos = LastPos;
 						else if(distance(NewPos, pCharCore->m_Pos) > D)
 							m_Pos = NewPos;
+						//summe_third += std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - decide_time).count() * 1000;
+						//printf("1: %fms\n", summe_first / count_collected);
+						//printf("2: %fms\n", summe_second / count_collected);
+						//printf("3: %fms\n", summe_third / count_collected);
 						return;
 					}
+					//summe_third += std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - decide_time).count() * 1000;
 				}
 				LastPos = Pos;
 			}
+			//printf("1: %fms\n", summe_first / count_collected);
+			//printf("2: %fms\n", summe_second / count_collected);
+			//printf("3: %fms\n", summe_third / count_collected);
 		}
 	}
 

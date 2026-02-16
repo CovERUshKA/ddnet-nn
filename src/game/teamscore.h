@@ -25,6 +25,7 @@ class CTeamsCore
 {
 	int m_aTeam[MAX_CLIENTS];
 	bool m_aIsSolo[MAX_CLIENTS];
+	std::vector<std::vector<int>> m_aTeamPlayers;
 
 public:
 	bool m_IsDDRace16;
@@ -38,6 +39,8 @@ public:
 
 	int Team(int ClientID) const;
 	void Team(int ClientID, int Team);
+
+	std::vector<int> GetPlayersInTeam(int Team) const;
 
 	void Reset();
 	void SetSolo(int ClientID, bool Value)

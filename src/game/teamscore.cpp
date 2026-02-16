@@ -17,9 +17,19 @@ int CTeamsCore::Team(int ClientID) const
 	return m_aTeam[ClientID];
 }
 
+std::vector<int> CTeamsCore::GetPlayersInTeam(int Team) const
+{
+	return m_aTeamPlayers[Team];
+}
+
 void CTeamsCore::Team(int ClientID, int Team)
 {
 	dbg_assert(Team >= TEAM_FLOCK && Team <= TEAM_SUPER, "invalid team");
+	if(m_aTeam[ClientID] != Team)
+	{
+		m_aTeamPlayers[m_aTeam[ClientID]].erase(std::remove(m_aTeamPlayers[m_aTeam[ClientID]].begin(), m_aTeamPlayers[m_aTeam[ClientID]].end(), ClientID), m_aTeamPlayers[m_aTeam[ClientID]].end());
+		m_aTeamPlayers[Team].push_back(ClientID);
+	}
 	m_aTeam[ClientID] = Team;
 }
 
@@ -51,4 +61,6 @@ void CTeamsCore::Reset()
 			m_aTeam[i] = TEAM_FLOCK;
 		m_aIsSolo[i] = false;
 	}
+
+	m_aTeamPlayers.assign(MAX_CLIENTS, {});
 }

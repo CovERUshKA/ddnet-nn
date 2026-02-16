@@ -76,7 +76,7 @@ void CGameWorld::InsertEntity(CEntity *pEnt)
 		dbg_assert(pCur != pEnt, "err");
 #endif
 
-	// insert it
+	// insert it on the first place and make next to be previously first element
 	if(m_apFirstEntityTypes[pEnt->m_ObjType])
 		m_apFirstEntityTypes[pEnt->m_ObjType]->m_pPrevTypeEntity = pEnt;
 	pEnt->m_pNextTypeEntity = m_apFirstEntityTypes[pEnt->m_ObjType];
@@ -260,6 +260,81 @@ void CGameWorld::UpdatePlayerMaps()
 	}
 }
 
+#include <queue>
+#include <condition_variable>
+
+// --------------------------------------------
+// Simple Persistent Thread Pool
+// --------------------------------------------
+class ThreadPool
+{
+public:
+	ThreadPool(size_t threads) :
+		stop(false)
+	{
+		for(size_t i = 0; i < threads; ++i)
+		{
+			workers.emplace_back([this]() {
+				for(;;)
+				{
+					function<void()> job;
+					{
+						unique_lock<mutex> lock(queue_mutex);
+						condition.wait(lock, [this] { return stop || !jobs.empty(); });
+						if(stop && jobs.empty())
+							return;
+						job = move(jobs.front());
+						jobs.pop();
+						active++;
+					}
+					job();
+					{
+						unique_lock<mutex> lock(queue_mutex);
+						active--;
+						if(jobs.empty() && active == 0)
+							finished.notify_one();
+					}
+				}
+			});
+		}
+	}
+
+	~ThreadPool()
+	{
+		{
+			unique_lock<mutex> lock(queue_mutex);
+			stop = true;
+		}
+		condition.notify_all();
+		for(auto &t : workers)
+			t.join();
+	}
+
+	void Enqueue(function<void()> job)
+	{
+		{
+			unique_lock<mutex> lock(queue_mutex);
+			jobs.push(move(job));
+		}
+		condition.notify_one();
+	}
+
+	void Wait()
+	{
+		unique_lock<mutex> lock(queue_mutex);
+		finished.wait(lock, [this] { return jobs.empty() && active == 0; });
+	}
+
+private:
+	vector<thread> workers;
+	queue<function<void()>> jobs;
+	mutex queue_mutex;
+	condition_variable condition;
+	condition_variable finished;
+	atomic<int> active{0};
+	bool stop;
+};
+
 void CGameWorld::Tick()
 {
 	//int64_t decide_time = time_get_impl();
@@ -270,6 +345,16 @@ void CGameWorld::Tick()
 	//printf("1: %f\n", (float)(time_get_impl() - decide_time) / (float)time_freq());
 	//decide_time = time_get_impl();
 
+	std::unordered_map<int, std::vector<CCharacter *>> TeamMap;
+
+	{
+		auto *pEnt = m_apFirstEntityTypes[ENTTYPE_CHARACTER];
+		for(; pEnt; pEnt = pEnt->m_pNextTypeEntity)
+		{
+			CCharacter *pChar = static_cast<CCharacter *>(pEnt);
+			TeamMap[pChar->Team()].push_back(pChar);
+		}
+	}
 
 	if(!m_Paused)
 	{
@@ -277,12 +362,33 @@ void CGameWorld::Tick()
 		if(GameServer()->m_pController->IsForceBalanced())
 			GameServer()->SendChat(-1, CGameContext::CHAT_ALL, "Teams have been balanced");
 		//printf("2: %f\n", (float)(time_get_impl() - decide_time) / (float)time_freq());
-		//decide_time = time_get_impl();
-		//float summe = 0;
+		/*decide_time = time_get_impl();
+		float summe_all = 0;
+		float summe_characters = 0;*/
+
+		static ThreadPool pool(thread::hardware_concurrency());
+
+		static bool multithread_characters = true;
+
+		if(multithread_characters)
+		{
+			// Dispatch per team
+			for(auto &[team, characters] : TeamMap)
+			{
+				pool.Enqueue([characters]() {
+					for(auto *c : characters)
+						c->Tick(); // Tick only
+					for(auto *c : characters)
+						c->TickDeferred(); // TickDeferred only
+				});
+			}
+		}
 
 		// update all objects
 		for(int i = 0; i < NUM_ENTTYPES; i++)
 		{
+			if(multithread_characters && i == ENTTYPE_CHARACTER)
+				continue;
 			// It's important to call PreTick() and Tick() after each other.
 			// If we call PreTick() before, and Tick() after other entities have been processed, it causes physics changes such as a stronger shotgun or grenade.
 			if(g_Config.m_SvNoWeakHook && i == ENTTYPE_CHARACTER)
@@ -295,7 +401,7 @@ void CGameWorld::Tick()
 					pEnt = m_pNextTraverseEntity;
 				}
 			}
-			//decide_time = time_get_impl();
+			// decide_time = time_get_impl();
 
 			auto *pEnt = m_apFirstEntityTypes[i];
 			for(; pEnt;)
@@ -304,20 +410,46 @@ void CGameWorld::Tick()
 				pEnt->Tick();
 				pEnt = m_pNextTraverseEntity;
 			}
-			//summe += time_get_impl() - decide_time;
+			/*auto now = time_get_impl();
+			summe_all += now - decide_time;
+			if(i == ENTTYPE_CHARACTER)
+			{
+				summe_characters = now - decide_time;
+			}*/
 		}
-		//printf("3: %f\n", summe / (float)time_freq());
-		//decide_time = time_get_impl();
+		/*auto all = summe_all / (float)time_freq();
+		auto characters = summe_characters / (float)time_freq();
+		printf("3: all: %f, characters: %f, percentage: %f\n", all, characters, (characters / all * 100.f));
+		summe_all = 0;
+		summe_characters = 0;*/
 
-		for(auto *pEnt : m_apFirstEntityTypes)
+		for (auto* pEnt : m_apFirstEntityTypes)
+		{
+			//decide_time = time_get_impl();
+			if(multithread_characters && pEnt == m_apFirstEntityTypes[ENTTYPE_CHARACTER])
+				continue;
 			for(; pEnt;)
 			{
 				m_pNextTraverseEntity = pEnt->m_pNextTypeEntity;
 				pEnt->TickDeferred();
 				pEnt = m_pNextTraverseEntity;
 			}
-		//printf("4: %f\n", (float)(time_get_impl() - decide_time) / (float)time_freq());
+			/*auto now = time_get_impl();
+			summe_all += now - decide_time;
+			if(was_character)
+			{
+				summe_characters = now - decide_time;
+			}*/
+		}
+		/*all = summe_all / (float)time_freq();
+		characters = summe_characters / (float)time_freq();
+		printf("4: all: %f, characters: %f, percentage: %f\n", all, characters, characters / all * 100.f);*/
 		//decide_time = time_get_impl();
+
+		if(multithread_characters)
+		{
+			pool.Wait(); // Wait until all teams finished
+		}
 	}
 	else
 	{

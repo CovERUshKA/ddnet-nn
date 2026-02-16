@@ -346,7 +346,7 @@ void CNeuralNetwork::StartFight(CPlayer* player, bool right_side)
 	m_pController->m_Teams.SetCharacterTeam(player->GetCID(), Team);
 	player->GetCharacter()->m_TeleCheckpoint = right_side ? 2 : 1;
 	player->GetCharacter()->Core()->m_Jumps = 0;
-	//printf("Spawning bot\n");
+
 	// Spawn enemy bot
 	CPlayer *enemy_bot = AddBot("Bot" + to_string(GetFirstEmptySlotId()));
 	vBots.push_back(enemy_bot);
@@ -357,7 +357,6 @@ void CNeuralNetwork::StartFight(CPlayer* player, bool right_side)
 	enemy_bot->GetCharacter()->SetActiveWeapon(WEAPON_HAMMER);
 	enemy_bot->GetCharacter()->m_TeleCheckpoint = right_side ? 1 : 2;
 	enemy_bot->GetCharacter()->Core()->m_Jumps = 0;
-	//printf("2\n");
 
 	// Spawn ball
 	CPlayer *ball_bot = AddBot("Ball" + to_string(GetFirstEmptySlotId()));
@@ -368,7 +367,6 @@ void CNeuralNetwork::StartFight(CPlayer* player, bool right_side)
 	ball_bot->GetCharacter()->m_TeleCheckpoint = 3;
 	ball_bot->GetCharacter()->Core()->m_Jumps = 0;
 	ball_bot->GetCharacter()->SetDeepFrozen(true);
-	//printf("3\n");
 
 	m_pController->m_Teams.ResetRoundState(Team);
 	m_pController->m_Teams.SetTeamLock(Team, true);
@@ -394,8 +392,6 @@ void CNeuralNetwork::StartFight(CPlayer* player, bool right_side)
 	ChangeSwitchState(23, Team, true);
 	ChangeSwitchState(24, Team, true);
 	ChangeSwitchState(32, Team, true);
-
-	//printf("4\n");
 }
 
 bool CNeuralNetwork::IsTraining()
@@ -432,14 +428,14 @@ void CNeuralNetwork::OnInit()
 	count_teams = MAX_CLIENTS / 3;
 	count_bots = count_teams * 3;
 	count_player_bots = count_teams * 2;
-	available_ticks_to_store = 1024000 / 4; // /2 /8
+	available_ticks_to_store = 1024000 / 8; // /2 /8
 	count_ticks = available_ticks_to_store / count_player_bots;
 	update_tick = count_ticks * skip_tick;
 	ticks_collected = last_update_tick = 0;
 
 	load_model = false;
 	load_previous = true;
-	load_folder_path = "train\\1771050259456";
+	load_folder_path = "train\\1771259415487";
 	load_main_model_name = "last";
 
 	bool record_initial_demo = false;
@@ -1092,7 +1088,7 @@ void CNeuralNetwork::PostTick(float time_to_tick)
 	// Rewards
 	static float last_touch_goal_window = 2.5f; // If the goal was scored in 2 seconds after touching the ball - goal reward is applied
 	static float goal_reward = 6.f; // Rewards when scoring a goal
-	static float goal_penalize_reward = -3.f; // Penalizes if goaled on your side
+	static float goal_penalize_reward = -6.f; // Penalizes if goaled on your side
 
 	// Spawn rewards
 	static float ball_on_center_spawn_reward = -0.3f; // -0.1f Center(at the start). This penalizes if both agents dont touch ball and it stays at spawn

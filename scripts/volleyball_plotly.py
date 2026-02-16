@@ -256,6 +256,7 @@ function initializeSmoothing() {
     for (var i = 0; i < gd.data.length; i++) {
 
         var trace = gd.data[i];
+        var fullTrace = gd._fullData[i];  // <- important
 
         var smoothedY = ema_tb(trace.y, SMOOTHING);
 
@@ -264,7 +265,10 @@ function initializeSmoothing() {
             y: smoothedY,
             type: trace.type,
             mode: trace.mode,
-            line: trace.line,
+            line: {
+                color: fullTrace.line.color,   // <- real rendered color
+                width: fullTrace.line.width
+            },
             name: trace.name + " (smoothed)",
             xaxis: trace.xaxis,
             yaxis: trace.yaxis,
