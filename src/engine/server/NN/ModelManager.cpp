@@ -10,6 +10,7 @@
 #include "ModelManager.h"
 #include <c10/cuda/CUDAGuard.h>
 #include <ATen/cuda/CUDAGraph.h>
+#include <ATen/autocast_mode.h>
 #include <torch/optim/schedulers/reduce_on_plateau_scheduler.h>
 
 //#include <algorithm> // For std::for_each
@@ -22,25 +23,25 @@ namespace fs = std::filesystem;
 
 int64_t n_in = 40;
 int64_t n_out = 7;
-int64_t h_start = 512; // 1024 256
+int64_t h_start = 1024; // 1024 256
 int64_t h_lstm = 256; // 256
 int64_t seq_len = 32;
 int64_t lstm_layers = 1; // 1024 256
 double std_dev = 0.37; // log(0.37) ~ -1
 double learning_rate = 5e-5;
-double actor_learning_rate = 1e-4; // 3e-4
+double actor_learning_rate = 3e-4; // 3e-4
 double log_std_learning_rate = 1e-5; // 1e-4 - global, 1e-5 state-dependent
-double critic_learning_rate = 3e-4; // 1e-3
+double critic_learning_rate = 5e-4; // 1e-3
 double lstm_learning_rate = 1e-4; // 1e-4
 //double weight_decay = 0.0001;
 
 int64_t mini_batch_size = 8000; // 8000 is the best I think
 int64_t count_mini_batches = 1;
 //int64_t max_mini_batch_size = 8000; // 4096, 8192, 16384, 32768
-int64_t ppo_epochs = 4;
+int64_t ppo_epochs = 2; // 4
 double ent_coef = 1e-2; // Entropy coefficient
-double min_ent_coef = 5e-3;
-double ent_decay_step = (ent_coef - min_ent_coef) / 300.;
+//double min_ent_coef = 5e-3;
+//double ent_decay_step = (ent_coef - min_ent_coef) / 300.;
 //double ent_decay_factor = 0.95;
 double clip_param = 0.2; // Default: 0.2
 float gamma = 0.99f; // Default: 0.99f Discount factor
@@ -78,6 +79,13 @@ torch::Tensor graph_main_input_tensor,
 			graph_main_output_tensor,
 			graph_h_main_output_tensor,
 			graph_c_main_output_tensor;
+torch::Tensor graph_categorical_rand,
+	      graph_normal_rands,
+	      graph_bernoulli_rands;
+torch::Tensor graph_actions_original,
+			graph_actions_sampled;
+torch::Tensor graph_old_current_sampled_tensor, graph_current_sampled_tensor;
+torch::Tensor graph_log_probs_tensor;
 at::cuda::CUDAGraph graph;
 at::cuda::CUDAStream graph_stream = at::cuda::getStreamFromPool();
 
@@ -158,14 +166,30 @@ void ModelManager::ResetCUDAGraph()
 		graph_output_tensors = torch::empty({old_models_count, ac_work->n_out}, torch::kCUDA);
 		graph_h_output_tensors = torch::zeros({lstm_layers, old_models_count, h_lstm}, torch::kCUDA);
 		graph_c_output_tensors = torch::zeros({lstm_layers, old_models_count, h_lstm}, torch::kCUDA);
+
+		// Old sampled actions
+		graph_old_current_sampled_tensor = torch::zeros({old_models_count, 5}, torch::kCUDA);
 	}
 	int current_models_count = count_bots - old_bots_indexes.size();
 	graph_main_input_tensor = torch::empty({current_models_count, n_in}, torch::kCUDA);
 	graph_h_main_input_tensor = torch::zeros({lstm_layers, current_models_count, h_lstm}, torch::kCUDA);
 	graph_c_main_input_tensor = torch::zeros({lstm_layers, current_models_count, h_lstm}, torch::kCUDA);
+	// Output Tensors
 	graph_main_output_tensor = torch::empty({current_models_count, ac_work->n_out}, torch::kCUDA);
 	graph_h_main_output_tensor = torch::zeros({lstm_layers, current_models_count, h_lstm}, torch::kCUDA);
 	graph_c_main_output_tensor = torch::zeros({lstm_layers, current_models_count, h_lstm}, torch::kCUDA);
+
+	// Current model sampling actions
+	graph_categorical_rand = torch::zeros({current_models_count, 3}, torch::kCUDA);
+	graph_normal_rands = torch::zeros({current_models_count, 2}, torch::kCUDA);
+	graph_bernoulli_rands = torch::zeros({2, current_models_count, 1}, torch::kCUDA);
+	graph_current_sampled_tensor = torch::zeros({current_models_count, 5}, torch::kCUDA);
+
+	graph_actions_original = torch::zeros({count_bots, ac_work->n_out}, device);
+	graph_actions_sampled = torch::zeros({count_bots, 5}, device);
+
+	graph_log_probs_tensor = torch::zeros({count_bots, 1}, device);
+
 	graph_recorded = false;
 	graph.reset();
 	// Forcefully clear the CUDA cache to free up cached memory from previous graphs
@@ -191,6 +215,9 @@ ModelManager::ModelManager(bool is_training, std::string train_folder, size_t ba
 
 	ResetAllBotsMemory();
 	ResetCUDAGraph();
+
+	std::cout << "Autocast dtype: " << torch::autocast::get_autocast_dtype(torch::kCUDA) << std::endl;
+	std::cout << "Is Autocast cache enabled: " << torch::autocast::is_autocast_cache_enabled() << std::endl;
 
 	// Global Speedups
 	// Produce nondetermenistic behavior even on the same gpu
@@ -463,16 +490,35 @@ bool ModelManager::ReloadCachedModels()
 }
 
 // Sample from a categorical distribution for a batch
-torch::Tensor sample_categorical_batch(torch::Tensor probs)
+//torch::Tensor sample_categorical_batch(torch::Tensor probs)
+//{
+//	// Sample using multinomial (1 sample per row)
+//	return torch::multinomial(probs, 1, /*replacement=*/true);
+//}
+
+torch::Tensor sample_categorical_from_logits(torch::Tensor logits, torch::Tensor rand = torch::Tensor())
 {
-	// Sample using multinomial (1 sample per row)
-	return torch::multinomial(probs, 1, /*replacement=*/true);
+	const double eps = 1e-20;
+
+	if(!rand.defined())
+	{
+		rand = torch::rand_like(logits); // Sample random numbers
+	}
+
+	auto U = rand.clamp_min(eps);
+	auto noise = -torch::log(-torch::log(U));
+
+	return (logits + noise).argmax(1, true);
 }
 
+
 // Sample from a Bernoulli distribution for a batch (boolean output)
-torch::Tensor sample_bernoulli_batch(torch::Tensor probs)
+torch::Tensor sample_bernoulli_batch(torch::Tensor probs, torch::Tensor rand = torch::Tensor())
 {
-	auto rand = torch::rand_like(probs); // Sample random numbers
+	if(!rand.defined())
+	{
+		rand = torch::rand_like(probs); // Sample random numbers
+	}
 	return (rand < probs); // Return boolean tensor
 }
 
@@ -507,10 +553,15 @@ torch::Tensor process_old_model_batch(torch::Tensor outputs)
 				    hammers.to(torch::kFloat32)},
 		1);
 }
-
 // Helper function for main network processing
 torch::Tensor
-process_main_network(torch::Tensor av_current, bool validating = false)
+process_main_network(
+	torch::Tensor av_current,
+	torch::Tensor categorical_rand = torch::Tensor(),
+	torch::Tensor normal_rands = torch::Tensor(),
+	torch::Tensor bernoulli_rands = torch::Tensor(),
+	bool validating = false
+)
 {
 	torch::Tensor angle_logits = av_current.slice(1, 0, 2);
 	torch::Tensor dir_logits = av_current.slice(1, 2, 5);
@@ -519,22 +570,26 @@ process_main_network(torch::Tensor av_current, bool validating = false)
 	torch::Tensor log_std = av_current.slice(1, 7, 9);
 
 	auto angles = torch::tanh(angle_logits);
-	//printf("keke\n");
-
-	// Directions
 	auto dir_probs = torch::softmax(dir_logits, 1);
-	auto directions = (ac_work->is_training() && !validating) ? sample_categorical_batch(dir_probs) : torch::argmax(dir_probs, 1).unsqueeze(1);
-
-	// Hooks/Hammers
 	auto hooks = torch::sigmoid(hook_logits);
 	auto hammers = torch::sigmoid(hammer_logits);
-	//printf("3131\n");
+
+	auto directions =
+		(ac_work->is_training() && !validating) ? sample_categorical_from_logits(dir_logits, categorical_rand) : torch::argmax(dir_probs, 1).unsqueeze(1);
 
 	if(ac_work->is_training() && !validating)
 	{
-		angles = ac_work->fast_normal(angles, log_std);
-		hooks = sample_bernoulli_batch(hooks);
-		hammers = sample_bernoulli_batch(hammers);
+		angles = ac_work->fast_normal(angles, log_std, normal_rands);
+		if(bernoulli_rands.defined())
+		{
+			hooks = sample_bernoulli_batch(hooks, bernoulli_rands[0]);
+			hammers = sample_bernoulli_batch(hammers, bernoulli_rands[1]);
+		}
+		else
+		{
+			hooks = sample_bernoulli_batch(hooks);
+			hammers = sample_bernoulli_batch(hammers);
+		}
 	}
 	else
 	{
@@ -542,16 +597,28 @@ process_main_network(torch::Tensor av_current, bool validating = false)
 		hammers = hammers > 0.5;
 	}
 
-	//printf("111\n");
-	/*std::cout << angles.sizes() << std::endl;
-	std::cout << directions.sizes() << std::endl;
-	std::cout << hooks.sizes() << std::endl;
-	std::cout << hammers.sizes() << std::endl;*/
-
-
-	auto catted = torch::cat({angles, directions.to(torch::kFloat32), hooks.to(torch::kFloat32), hammers.to(torch::kFloat32)}, 1);
+	auto catted = torch::cat({angles,
+					 directions.to(torch::kFloat32),
+					 hooks.to(torch::kFloat32),
+					 hammers.to(torch::kFloat32)},
+		1);
 
 	return catted;
+}
+
+void autocast_enable()
+{
+	// Enable autocast for the current scope
+	torch::autocast::set_autocast_enabled(device, true);
+	//torch::autocast::set_autocast_dtype(device, self.fast_dtype); // #type : ignore[arg - type]
+	//torch::autocast::set_autocast_cache_enabled(self._cache_enabled);
+}
+
+void autocast_disable()
+{
+	// Disable autocast for the current scope
+	torch::autocast::set_autocast_enabled(device, false);
+	torch::autocast::clear_cache();
 }
 
 std::vector<ModelOutput> ModelManager::Decide(
@@ -563,11 +630,12 @@ std::vector<ModelOutput> ModelManager::Decide(
 	double &time_process_last,
 	bool validating)
 {
-	cudaError_t err = cudaSuccess;
+	//cudaError_t err = cudaSuccess;
 	auto measure_time = std::chrono::high_resolution_clock::now();
 
 	// Turn off gradient calculation
 	torch::NoGradGuard no_grad;
+	torch::StreamGuard stream_guard{graph_stream};
 
 	std::vector<ModelOutput> outputs;
 
@@ -623,6 +691,11 @@ std::vector<ModelOutput> ModelManager::Decide(
 	h_lstm_states_saved.copy_(h_lstm_states);
 	c_lstm_states_saved.copy_(c_lstm_states);
 
+	// Fill rands
+	graph_categorical_rand.copy_(torch::rand_like(graph_categorical_rand, torch::kCUDA));
+	graph_normal_rands.copy_(torch::rand_like(graph_normal_rands, torch::kCUDA));
+	graph_bernoulli_rands.copy_(torch::rand_like(graph_bernoulli_rands, torch::kCUDA));
+
 	auto now = std::chrono::high_resolution_clock::now();
 	time_pre_forward = std::chrono::duration<double>(now - measure_time).count() * 1000.;
 
@@ -630,13 +703,19 @@ std::vector<ModelOutput> ModelManager::Decide(
 	//printf("A\n");
 	if(!graph_recorded && warmup_index >= 3)
 	{
-		torch::StreamGuard stream_guard{graph_stream};
+		graph_stream.synchronize();
 		graph.capture_begin();
+
+		// Enable autocast
+		autocast_enable();
 
 		auto main_output = ac_work->actor_forward(graph_main_input_tensor, graph_h_main_input_tensor, graph_c_main_input_tensor);
 		graph_main_output_tensor.copy_(std::get<0>(main_output), true);
 		graph_h_main_output_tensor.copy_(std::get<1>(main_output), true);
 		graph_c_main_output_tensor.copy_(std::get<2>(main_output), true);
+
+		// Disable autocast
+		autocast_disable();
 
 		for(int i = 0; i < old_bots_indexes.size(); ++i)
 		{
@@ -650,16 +729,47 @@ std::vector<ModelOutput> ModelManager::Decide(
 			graph_c_output_tensors[0][i].copy_(std::get<2>(av_old).reshape({h_lstm}), true);
 		}
 
+		if(old_bots_indexes.size())
+		{
+			auto old_current_sampled = process_old_model_batch(graph_output_tensors);
+			graph_old_current_sampled_tensor.copy_(old_current_sampled, true);
+		}
+
+		auto av_current_sampled = process_main_network(graph_main_output_tensor, graph_categorical_rand, graph_normal_rands, graph_bernoulli_rands);
+		graph_current_sampled_tensor.copy_(av_current_sampled, true);
+
+		graph_actions_original.index_copy_(0, input_to_model_id_tensor_current_indexes, graph_main_output_tensor);
+		graph_actions_sampled.index_copy_(0, input_to_model_id_tensor_current_indexes, graph_current_sampled_tensor);
+		h_lstm_states.index_copy_(1, input_to_model_id_tensor_current_indexes, graph_h_main_output_tensor);
+		c_lstm_states.index_copy_(1, input_to_model_id_tensor_current_indexes, graph_c_main_output_tensor);
+		if(is_training && old_bots_indexes.size())
+		{
+			graph_actions_original.index_copy_(0, input_to_model_id_tensor_old_indexes, graph_output_tensors);
+			graph_actions_sampled.index_copy_(0, input_to_model_id_tensor_old_indexes, graph_old_current_sampled_tensor);
+			h_lstm_states.index_copy_(1, input_to_model_id_tensor_old_indexes, graph_h_output_tensors);
+			c_lstm_states.index_copy_(1, input_to_model_id_tensor_old_indexes, graph_c_output_tensors);
+		}
+
+		if(is_training && !validating)
+		{
+			auto tLogProbs = ac_work->log_prob(graph_actions_original, graph_actions_sampled);
+			graph_log_probs_tensor.copy_(tLogProbs);
+		}
+
 		graph.capture_end();
 		graph_recorded = true;
 	}
 	else if(!graph_recorded && warmup_index < 3)
 	{
 		//printf("RR1\n");
+		// Enable autocast
+		autocast_enable();
 		auto main_output = ac_work->actor_forward(graph_main_input_tensor, graph_h_main_input_tensor, graph_c_main_input_tensor);
 		graph_main_output_tensor.copy_(std::get<0>(main_output), true);
 		graph_h_main_output_tensor.copy_(std::get<1>(main_output), true);
 		graph_c_main_output_tensor.copy_(std::get<2>(main_output), true);
+		// Disable autocast
+		autocast_disable();
 		//printf("RR1.2\n");
 		for(int i = 0; i < old_bots_indexes.size(); ++i)
 		{
@@ -675,42 +785,49 @@ std::vector<ModelOutput> ModelManager::Decide(
 			//printf("RR2.4\n");
 			graph_c_output_tensors[0][i].copy_(std::get<2>(av_old).reshape({h_lstm}), true);
 		}
+		if(old_bots_indexes.size())
+		{
+			auto old_current_sampled = process_old_model_batch(graph_output_tensors);
+			graph_old_current_sampled_tensor.copy_(old_current_sampled, true);
+		}
+
+		auto av_current_sampled = process_main_network(graph_main_output_tensor, graph_categorical_rand, graph_normal_rands, graph_bernoulli_rands);
+		graph_current_sampled_tensor.copy_(av_current_sampled, true);
+
+		graph_actions_original.index_copy_(0, input_to_model_id_tensor_current_indexes, graph_main_output_tensor);
+		graph_actions_sampled.index_copy_(0, input_to_model_id_tensor_current_indexes, graph_current_sampled_tensor);
+		h_lstm_states.index_copy_(1, input_to_model_id_tensor_current_indexes, graph_h_main_output_tensor);
+		c_lstm_states.index_copy_(1, input_to_model_id_tensor_current_indexes, graph_c_main_output_tensor);
+		if(is_training && old_bots_indexes.size())
+		{
+			graph_actions_original.index_copy_(0, input_to_model_id_tensor_old_indexes, graph_output_tensors);
+			graph_actions_sampled.index_copy_(0, input_to_model_id_tensor_old_indexes, graph_old_current_sampled_tensor);
+			h_lstm_states.index_copy_(1, input_to_model_id_tensor_old_indexes, graph_h_output_tensors);
+			c_lstm_states.index_copy_(1, input_to_model_id_tensor_old_indexes, graph_c_output_tensors);
+		}
+
+		if(is_training && !validating)
+		{
+			auto tLogProbs = ac_work->log_prob(graph_actions_original, graph_actions_sampled);
+			graph_log_probs_tensor.copy_(tLogProbs);
+		}
+
 		warmup_index += 1;
 	}
 	else
 	{
 		graph.replay();
 	}
-	//printf("WEWE\n");
+
 	now = std::chrono::high_resolution_clock::now();
 	time_forward = std::chrono::duration<double>(now - measure_time).count() * 1000.;
 	measure_time = std::chrono::high_resolution_clock::now();
-	//printf("1\n");
-	torch::Tensor av_current_sampled, old_current_sampled;
-	if(old_bots_indexes.size())
-	{
-		old_current_sampled = process_old_model_batch(graph_output_tensors);
-	}
-
-	av_current_sampled = process_main_network(graph_main_output_tensor);
 
 	now = std::chrono::high_resolution_clock::now();
+
 	time_normal = std::chrono::duration<double>(now - measure_time).count() * 1000.;
 	measure_time = std::chrono::high_resolution_clock::now();
 	//printf("RWEWQewqe.2\n");
-	torch::Tensor tActions_original = torch::zeros({(int)input_inputs.size(), ac_work->n_out}, device);
-	torch::Tensor tActions_sampled = torch::zeros({(int)input_inputs.size(), 5}, device);
-	tActions_original.index_copy_(0, input_to_model_id_tensor_current_indexes, graph_main_output_tensor);
-	tActions_sampled.index_copy_(0, input_to_model_id_tensor_current_indexes, av_current_sampled);
-	h_lstm_states.index_copy_(1, input_to_model_id_tensor_current_indexes, graph_h_main_output_tensor);
-	c_lstm_states.index_copy_(1, input_to_model_id_tensor_current_indexes, graph_c_main_output_tensor);
-	if(is_training && old_bots_indexes.size())
-	{
-		tActions_original.index_copy_(0, input_to_model_id_tensor_old_indexes, graph_output_tensors);
-		tActions_sampled.index_copy_(0, input_to_model_id_tensor_old_indexes, old_current_sampled);
-		h_lstm_states.index_copy_(1, input_to_model_id_tensor_old_indexes, graph_h_output_tensors);
-		c_lstm_states.index_copy_(1, input_to_model_id_tensor_old_indexes, graph_c_output_tensors);
-	}
 	//printf("QWEWQEWQEwewqe.2\n");
 	// Concatenate all actions into a single tensor
 	/*auto tActions_original = torch::cat(all_actions_original, 0).reshape({(int)input_inputs.size(), ac_work->n_out});
@@ -720,25 +837,49 @@ std::vector<ModelOutput> ModelManager::Decide(
 	time_to_cpu = std::chrono::duration<double>(now - measure_time).count() * 1000.;
 	measure_time = std::chrono::high_resolution_clock::now();
 	//printf("QRRRRWEWQE\n");
+
+	//using clock = std::chrono::high_resolution_clock;
+
+	//static int count_collected = 0;
+	////static int count_collected_overall = 0;
+	//static double total_time = 0.0;
+	//static double logprob_time = 0.0;
+	//static double angle_math_time = 0.0;
+	//static double slicing_time = 0.0;
+	//static double gpu_to_cpu_time = 0.0;
+	//static double cpu_loop_time = 0.0;
+
+	//count_collected++;
+	//count_collected_overall++;
+
+	//auto total_start = clock::now();
+
 	if(is_training && !validating)
 	{
-		auto tLogProbs = ac_work->log_prob(tActions_original, tActions_sampled);
+		//auto t0 = clock::now();
+		//logprob_time += std::chrono::duration<double>(clock::now() - t0).count() * 1000.0;
 		states.push_back(state_gpu);
-		actions.push_back(tActions_sampled);
+		actions.push_back(graph_actions_sampled.clone());
 		// values.push_back(tValues);
-		log_probs.push_back(tLogProbs);
+		log_probs.push_back(graph_log_probs_tensor.clone());
 	}
-
+	//auto t0 = clock::now();
 	// Process angles
-	auto angles = tActions_sampled.index({torch::indexing::Slice(), torch::indexing::Slice(0, 2)});
+	auto angles = graph_actions_sampled.index({torch::indexing::Slice(), torch::indexing::Slice(0, 2)});
 	auto ataned = torch::atan2(angles.index({torch::indexing::Slice(), 1}), angles.index({torch::indexing::Slice(), 0}));
 	auto angle_x = torch::cos(ataned);
 	auto angle_y = torch::sin(ataned);
+	//angle_math_time += std::chrono::duration<double>(clock::now() - t0).count() * 1000.0;
 
-	auto directions = tActions_sampled.index({torch::indexing::Slice(), torch::indexing::Slice(2, 3)});
-	auto hooks = tActions_sampled.index({torch::indexing::Slice(), torch::indexing::Slice(3, 4)});
-	auto hammers = tActions_sampled.index({torch::indexing::Slice(), torch::indexing::Slice(4, 5)});
+	// ================= SLICING =================
+	//t0 = clock::now();
+	auto directions = graph_actions_sampled.index({torch::indexing::Slice(), torch::indexing::Slice(2, 3)});
+	auto hooks = graph_actions_sampled.index({torch::indexing::Slice(), torch::indexing::Slice(3, 4)});
+	auto hammers = graph_actions_sampled.index({torch::indexing::Slice(), torch::indexing::Slice(4, 5)});
+	//slicing_time += std::chrono::duration<double>(clock::now() - t0).count() * 1000.0;
 
+	// ================= GPU → CPU =================
+	//t0 = clock::now();
 	angle_x = angle_x.to(torch::kCPU, true);
 	angle_y = angle_y.to(torch::kCPU, true);
 	directions = (directions.reshape({(int)input_inputs.size()}) - 1).to(torch::kLong).to(torch::kCPU, true);
@@ -746,8 +887,14 @@ std::vector<ModelOutput> ModelManager::Decide(
 	hammers = hammers.reshape({(int)input_inputs.size()}).to(torch::kBool).to(torch::kCPU, true);
 
 	// When CPU -> GPU no synchronization needed, but needed when GPU -> CPU https://pytorch.org/tutorials/intermediate/pinmem_nonblock.html
-	cudaStreamSynchronize(c10::cuda::getCurrentCUDAStream());
+	//cudaStreamSynchronize(c10::cuda::getCurrentCUDAStream());
+	//torch::cuda::synchronize();
+	graph_stream.synchronize();
+
+	//gpu_to_cpu_time += std::chrono::duration<double>(clock::now() - t0).count() * 1000.0;
 	
+	// ================= CPU LOOP =================
+	//t0 = clock::now();
 	auto angle_x_vec = angle_x.accessor<float, 1>(); // at::Half float
 	auto angle_y_vec = angle_y.accessor<float, 1>();
 	auto direction_indices_vec = directions.accessor<int64_t, 1>();
@@ -762,7 +909,33 @@ std::vector<ModelOutput> ModelManager::Decide(
 		output.hammer = static_cast<bool>(hammer_indices_vec[i]);
 		outputs.push_back(output);
 	}
+	//cpu_loop_time += std::chrono::duration<double>(clock::now() - t0).count() * 1000.0;
+	//total_time += std::chrono::duration<double>(clock::now() - total_start).count() * 1000.0;
 	now = std::chrono::high_resolution_clock::now();
+	// ================= PRINT =================
+	//if(count_collected % 200 == 0)
+	//{
+	//	printf("\n=== Post-process avg over %d ===\n", count_collected);
+	//	printf("Total:         %.6f ms\n", total_time / count_collected);
+	//	printf("LogProb:       %.6f ms\n", logprob_time / count_collected);
+	//	printf("Angle math:    %.6f ms\n", angle_math_time / count_collected);
+	//	printf("Slicing:       %.6f ms\n", slicing_time / count_collected);
+	//	printf("GPU->CPU:      %.6f ms\n", gpu_to_cpu_time / count_collected);
+	//	printf("CPU loop:      %.6f ms\n", cpu_loop_time / count_collected);
+	//	printf("================================\n\n");
+	//	total_time = 0.0;
+	//	logprob_time = 0.0;
+	//	angle_math_time = 0.0;
+	//	slicing_time = 0.0;
+	//	gpu_to_cpu_time = 0.0;
+	//	cpu_loop_time = 0.0;
+	//	count_collected = 0;
+	//	/*if(count_collected_overall % 5000 == 0)
+	//	{
+	//		printf("Sleeping for 1 sec\n");
+	//		Sleep(1000);
+	//	}*/
+	//}
 	time_process_last = std::chrono::duration<double>(now - measure_time).count() * 1000.;
 	return outputs;
 }

@@ -428,7 +428,7 @@ void CNeuralNetwork::OnInit()
 	count_teams = MAX_CLIENTS / 3;
 	count_bots = count_teams * 3;
 	count_player_bots = count_teams * 2;
-	available_ticks_to_store = 1024000 / 8; // /2 /8
+	available_ticks_to_store = 1024000 / 2; // /2 /8
 	count_ticks = available_ticks_to_store / count_player_bots;
 	update_tick = count_ticks * skip_tick;
 	ticks_collected = last_update_tick = 0;

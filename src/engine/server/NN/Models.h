@@ -351,15 +351,25 @@ struct ActorCriticImpl : public torch::nn::Module
     }
 
 	// Fast normal without synchronization that torch::normal do
-	torch::Tensor fast_normal(torch::Tensor mean, torch::Tensor log_std)
+	// rands - tensor with shape of [2, sizeof(mean)]. rand_like(mean) times 2
+    torch::Tensor fast_normal(torch::Tensor mean, torch::Tensor log_std, torch::Tensor rands = torch::Tensor())
     {
 	    // Ensure tensors are on CUDA
 	    TORCH_CHECK(mean.is_cuda() && log_std.is_cuda(), "Tensors must be on CUDA");
 
 	    // Generate two uniform random tensors (0,1)
 	    // rand_like outputs in range [0,1), so rotate it to avoid log(0) which is inf
-	    auto U1 = 1 - torch::rand_like(mean, torch::kCUDA);
-	    auto U2 = torch::rand_like(mean, torch::kCUDA);
+	    torch::Tensor U1, U2;
+	    if(rands.defined())
+	    {
+		    U1 = 1 - rands[0];
+		    U2 = rands[1];
+	    }
+	    else
+	    {
+		    U1 = 1 - torch::rand_like(mean, torch::kCUDA);
+		    U2 = torch::rand_like(mean, torch::kCUDA);
+	    }
 
 	    // Box-Muller transform
 	    auto R = torch::sqrt(-2.0 * torch::log(U1));

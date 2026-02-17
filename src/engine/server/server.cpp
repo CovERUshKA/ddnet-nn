@@ -860,9 +860,10 @@ int CServer::SendMsg(CMsgPacker *pMsg, int Flags, int ClientID)
 			if(m_aDemoRecorder[MAX_CLIENTS].IsRecording())
 				m_aDemoRecorder[MAX_CLIENTS].RecordMessage(Pack.Data(), Pack.Size());
 		}
-
+		#ifndef NEURAL_NETWORK_TRAINING
 		if(!(Flags & MSGFLAG_NOSEND))
 			m_NetServer.Send(&Packet);
+		#endif
 	}
 
 	return 0;
