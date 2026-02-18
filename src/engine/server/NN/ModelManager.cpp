@@ -88,6 +88,7 @@ torch::Tensor graph_old_current_sampled_tensor, graph_current_sampled_tensor;
 torch::Tensor graph_log_probs_tensor;
 at::cuda::CUDAGraph graph;
 at::cuda::CUDAStream graph_stream = at::cuda::getStreamFromPool();
+int cuda_warmup_iterations = 5;
 
 VT states;
 VT actions;
@@ -701,7 +702,7 @@ std::vector<ModelOutput> ModelManager::Decide(
 
 	measure_time = std::chrono::high_resolution_clock::now();
 	//printf("A\n");
-	if(!graph_recorded && warmup_index >= 3)
+	if(!graph_recorded && warmup_index >= cuda_warmup_iterations)
 	{
 		graph_stream.synchronize();
 		graph.capture_begin();
@@ -759,7 +760,7 @@ std::vector<ModelOutput> ModelManager::Decide(
 		graph.capture_end();
 		graph_recorded = true;
 	}
-	else if(!graph_recorded && warmup_index < 3)
+	else if(!graph_recorded && warmup_index < cuda_warmup_iterations)
 	{
 		//printf("RR1\n");
 		// Enable autocast

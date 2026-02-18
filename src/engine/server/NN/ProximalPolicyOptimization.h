@@ -137,7 +137,13 @@ public:
 				if(capacity() - dones.size() >= players_states[i].size())
 				{
 					//printf("Saving...\n");
-					auto stacked = torch::stack(players_states[i]);
+					torch::Tensor stacked = torch::stack(players_states[i]);
+					int64_t T = stacked.size(0);
+					int64_t remainder = T % seq_len;
+					if(remainder != 0)
+					{
+						stacked = stacked.slice(0, remainder, T);
+					}
 					//while(true)
 					//{
 					//	stacked = torch::stack(players_states[i]);
@@ -150,6 +156,10 @@ public:
 					//printf("2\n");
 
 					stacked = torch::stack(players_actions[i]);
+					if(remainder != 0)
+					{
+						stacked = stacked.slice(0, remainder, T);
+					}
 					//printf("2.1\n");
 					//actions.index({(long long)(dones.size())}).copy_(stacked, true);
 					actions.index({torch::indexing::Slice(dones.size(), dones.size() + stacked.size(0))}).copy_(stacked, true);
@@ -157,24 +167,37 @@ public:
 					//printf("3\n");
 
 					stacked = torch::stack(players_log_probs[i]);
+					if(remainder != 0)
+					{
+						stacked = stacked.slice(0, remainder, T);
+					}
 					log_probs.index({torch::indexing::Slice(dones.size(), dones.size() + stacked.size(0))}).copy_(stacked, true);
 					//log_probs.index({(long long)(dones.size())}).copy_(stacked, true);
 					players_log_probs[i].clear();
 					//printf("4\n");
 
 					stacked = torch::stack(players_h_lstm[i]);
+					if(remainder != 0)
+					{
+						stacked = stacked.slice(0, remainder, T);
+					}
 					h_lstm.index({0, torch::indexing::Slice(dones.size(), dones.size() + stacked.size(0))}).copy_(stacked, true);
 					players_h_lstm[i].clear();
 
 					stacked = torch::stack(players_c_lstm[i]);
+					if(remainder != 0)
+					{
+						stacked = stacked.slice(0, remainder, T);
+					}
 					c_lstm.index({0, torch::indexing::Slice(dones.size(), dones.size() + stacked.size(0))}).copy_(stacked, true);
 					players_c_lstm[i].clear();
 
-					rewards.insert(rewards.end(), players_rewards[i].begin(), players_rewards[i].end());
+					rewards.insert(rewards.end(), players_rewards[i].begin() + remainder, players_rewards[i].end());
+					accumulation_resets.insert(accumulation_resets.end(), players_accumulation_resets[i].begin() + remainder, players_accumulation_resets[i].end());
+					dones.insert(dones.end(), players_dones[i].begin() + remainder, players_dones[i].end());
+
 					players_rewards[i].clear();
-					accumulation_resets.insert(accumulation_resets.end(), players_accumulation_resets[i].begin(), players_accumulation_resets[i].end());
 					players_accumulation_resets[i].clear();
-					dones.insert(dones.end(), players_dones[i].begin(), players_dones[i].end());
 					players_dones[i].clear();
 					//printf("Saved.\n");
 					count_episodes += 1;
